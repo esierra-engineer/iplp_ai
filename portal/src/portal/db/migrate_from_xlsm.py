@@ -43,6 +43,8 @@ import openpyxl
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
+from ..curves.reservoir_volume import volume_from_level
+from ..curves.reservoir_yield import yield_from_level
 from ..dat_readers import (
     parse_lines_raw,
     parse_plpaflce,
@@ -373,6 +375,51 @@ def _import_plants(
         def f(col: int) -> float:
             return _safe_float(ws.cell(row, col).value, context=f"Centrales!{plant_name}, col {col}")
 
+        def vol_or_from_cota(vol_col: int, cota_col: int) -> float:
+            """Volumen columns (23-26) are themselves `=Vol_<Name>(cota)` formulas calling the
+            FUNCCDEC_CDEC.xla add-in — when that add-in isn't loaded at recalc time Excel caches
+            '#NAME?' instead of a number (confirmed: this happens in real, currently-used
+            workbooks). Recover it ourselves using the exact same ported curve (see
+            curves/reservoir_volume.py) against the paired Cota column (19-22), which isn't
+            formula-derived and so doesn't have this failure mode."""
+            raw = ws.cell(row, vol_col).value
+            if isinstance(raw, (int, float)):
+                return float(raw)
+            if isinstance(raw, str) and raw.strip().upper() in _EXCEL_ERROR_STRINGS:
+                cota = ws.cell(row, cota_col).value
+                try:
+                    return volume_from_level(plant_name, float(cota))
+                except (TypeError, ValueError, KeyError) as exc:
+                    print(
+                        f"import_case: warning, Centrales!{plant_name} col {vol_col} is "
+                        f"{raw!r} and recovering it from Cota (col {cota_col}={cota!r}) failed "
+                        f"({exc}) — using 0.0."
+                    )
+                    return 0.0
+            return _safe_float(raw, context=f"Centrales!{plant_name}, col {vol_col}")
+
+        def rendimiento_or_from_cota() -> float:
+            """Rendimiento (col 5) has the same '=Rend_<Name>(cota)' failure mode as the Volumen
+            columns — see vol_or_from_cota above and curves/reservoir_yield.py. Only a subset of
+            reservoirs have a ported Rend_<Name> curve at all (e.g. LMAULE genuinely has none in
+            the source workbook), so this falls back to _safe_float's plain 0.0 default if there's
+            no curve to recover from, same as any other unresolvable error."""
+            raw = ws.cell(row, 5).value
+            if isinstance(raw, (int, float)):
+                return float(raw)
+            if isinstance(raw, str) and raw.strip().upper() in _EXCEL_ERROR_STRINGS:
+                cota = ws.cell(row, 19).value
+                try:
+                    return yield_from_level(plant_name, float(cota))
+                except (TypeError, ValueError, KeyError) as exc:
+                    print(
+                        f"import_case: warning, Centrales!{plant_name} col 5 (rendimiento) is "
+                        f"{raw!r} and recovering it from Cota (col 19={cota!r}) failed ({exc}) — "
+                        "using 0.0."
+                    )
+                    return 0.0
+            return _safe_float(raw, context=f"Centrales!{plant_name}, col 5")
+
         plant = Plant(
             case_id=case.id,
             cen_ind=int(cen_ind),
@@ -380,7 +427,7 @@ def _import_plants(
             plant_type=plant_type,
             bus_id=bus.id if bus else None,
             cos_var=f(4),
-            rendimiento=f(5),
+            rendimiento=rendimiento_or_from_cota(),
             pot_min=f(27),
             pot_max=f(28),
         )
@@ -397,10 +444,10 @@ def _import_plants(
             session.add(
                 Reservoir(
                     plant_id=plant.id,
-                    vol_ini=f(23),
-                    vol_fin=f(24),
-                    vol_min=f(25),
-                    vol_max=f(26),
+                    vol_ini=vol_or_from_cota(23, 19),
+                    vol_fin=vol_or_from_cota(24, 20),
+                    vol_min=vol_or_from_cota(25, 21),
+                    vol_max=vol_or_from_cota(26, 22),
                     f_esc=golden_femb.get(plant.name, 1.0),
                     cfue=bool(ws.cell(row, 9).value),
                 )
