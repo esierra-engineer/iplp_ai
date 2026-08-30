@@ -496,3 +496,109 @@ class ThermalCostSchedule(Base):
     cost_var: Mapped[float] = mapped_column(Float)
 
     plant: Mapped[Plant] = relationship()
+
+
+# =================================================================================================
+# Phase 4 — maintenance schedules
+# =================================================================================================
+#
+# Unlike plpcosce.dat's CV_MP source, three of these four Excel-sourced tables come PRE-MERGED
+# into block/stage ranges (a second table on the same sheet, to the right of the raw date-range
+# input table) — no date->stage conversion logic needed for them at all. Only ReservoirMinVolume
+# Slack (MantEMBh) has just the raw date-range table and needs date->block/stage conversion (see
+# migrate_from_xlsm.py's _date_range_to_stage_range) plus the ported Vol_<Name> curves (level ->
+# volume). Battery maintenance (plpmanbat.dat, per the user's 2026-08-30 ruling: the code's
+# filename is the rule, not the checked-in sample's "plpmantbat.dat") has no Excel source at all
+# (confirmed: no maintenance columns/sheet found for Baterias) — bootstrapped from the golden file,
+# same mechanism as Phase 2's reservoir curves.
+
+
+class PlantMaintenance(Base):
+    """plpmance.dat source: MantCEN sheet's pre-merged block-range table (columns I-M:
+    CENTRAL/INICIAL/FINAL/MÍNIMA/MÁXIMA, block-numbered — confirmed against the case's own data:
+    max FINAL there is 234, this case's total block count). Ranges need not cover every block for
+    a plant, and multiple ranges per plant are normal (~238k populated sheet rows across ~2783
+    plants) — expanded into one row per block at generation time, same pattern as
+    ThermalCostSchedule."""
+
+    __tablename__ = "plant_maintenance"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    block_start: Mapped[int] = mapped_column(Integer)  # num_blo, inclusive
+    block_end: Mapped[int] = mapped_column(Integer)  # num_blo, inclusive
+    pot_min: Mapped[float] = mapped_column(Float)
+    pot_max: Mapped[float] = mapped_column(Float)
+
+    plant: Mapped[Plant] = relationship()
+
+
+class LineMaintenance(Base):
+    """plpmanli.dat source: MantLIN sheet's pre-merged block-range table (columns I-N)."""
+
+    __tablename__ = "line_maintenance"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    line_id: Mapped[int] = mapped_column(ForeignKey("line.id"))
+    block_start: Mapped[int] = mapped_column(Integer)
+    block_end: Mapped[int] = mapped_column(Integer)
+    capacity_ab: Mapped[float] = mapped_column(Float)
+    capacity_ba: Mapped[float] = mapped_column(Float)
+    operational: Mapped[bool] = mapped_column(Boolean)
+
+    line: Mapped[Line] = relationship()
+
+
+class ReservoirMaintenance(Base):
+    """plpmanem.dat source: MantEMB sheet's pre-merged stage-range table (columns H-L) — already
+    volume-valued (not level/cota), unlike MantEMBh below."""
+
+    __tablename__ = "reservoir_maintenance"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))  # the Embalse-type plant
+    stage_start: Mapped[int] = mapped_column(Integer)  # num_eta, inclusive
+    stage_end: Mapped[int] = mapped_column(Integer)  # num_eta, inclusive
+    vol_min: Mapped[float] = mapped_column(Float)
+    vol_max: Mapped[float] = mapped_column(Float)
+
+    plant: Mapped[Plant] = relationship()
+
+
+class ReservoirMinVolumeSlack(Base):
+    """plpminembh.dat source: MantEMBh sheet — level (Cota)/cost by date range, the one Phase 4
+    table with no pre-merged stage-range companion. `level_min` is stored in the sheet's own units
+    (m.s.n.m.) — converted to volume via curves/reservoir_volume.py at generation time, same
+    raw-units-in-DB / converted-at-generation approach as Phase 2's Reservoir.vol_*."""
+
+    __tablename__ = "reservoir_min_volume_slack"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    stage_start: Mapped[int] = mapped_column(Integer)
+    stage_end: Mapped[int] = mapped_column(Integer)
+    level_min: Mapped[float] = mapped_column(Float)  # Cota, m.s.n.m.
+    cost: Mapped[float] = mapped_column(Float)
+
+    plant: Mapped[Plant] = relationship()
+
+
+class BatteryMaintenance(Base):
+    """plpmanbat.dat source — no Excel source at all (see module docstring); bootstrapped from
+    the golden file. Block-range table, analogous to PlantMaintenance."""
+
+    __tablename__ = "battery_maintenance"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id"))
+    block_start: Mapped[int] = mapped_column(Integer)
+    block_end: Mapped[int] = mapped_column(Integer)
+    e_min: Mapped[float] = mapped_column(Float)  # negative sentinel = "no override", see spec
+    e_max: Mapped[float] = mapped_column(Float)
+
+    battery: Mapped[Battery] = relationship()

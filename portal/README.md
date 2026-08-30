@@ -5,7 +5,7 @@ authors PLP model case data and generates the `.dat` files the PLP solver reads.
 `/home/erick/.claude/plans/ethereal-scribbling-tiger.md` for the full phased plan; this covers
 what's implemented so far.
 
-## Status: Phase 0 + 1 + 2 + 3 complete
+## Status: Phase 0 + 1 + 2 + 3 + 4 complete
 
 - **Phase 0** — `curves/reservoir_volume.py`: the 15 `Vol_<Name>` reservoir level→volume rating
   curves ported from `xla/FUNCCDEC_CDEC.xla`, needed by Phase 4's maintenance generators.
@@ -45,6 +45,33 @@ what's implemented so far.
   stage, not chronological chunks of the whole stage. `Stage.start_date` was added to the schema to
   support this (Phase 1's Block import still bootstraps from the golden `plpblo.dat`, which remains
   correct — this only affects how Phase 3 has to walk the calendar for demand).
+- **Phase 4** — maintenance schedules: `plant_maintenance`, `line_maintenance`,
+  `reservoir_maintenance`, `reservoir_min_volume_slack`, `battery_maintenance`; generators for
+  `plpmance.dat` (2,783 plants, ~610k data rows — the largest golden file in the project at 36.7MB),
+  `plpmanli.dat`, `plpmanem.dat`, `plpminembh.dat`, `plpmanbat.dat` (written under that name per the
+  user's 2026-08-30 filename ruling, even though the checked-in sample is `plpmantbat.dat`).
+
+  Three of these four Excel-sourced tables turned out to have a **pre-merged block/stage-range
+  companion table already on the sheet** (MantCEN, MantLIN, MantEMB each have a second table to the
+  right of the raw date-range input, already resolved to block/stage numbers — MantEMB's is even
+  already volume-valued, not level/Cota) — no date→stage conversion logic needed for them at all.
+  Only `MantEMBh` (→ `plpminembh.dat`) has just the raw date-range table, needing both date→stage
+  conversion and the ported `Vol_<Name>` curves from Phase 0 (level→volume, further divided by
+  1000 — a different, simpler, non-`f_esc`-dependent convention than `plpcnfce.dat`'s embalse
+  volumes needed).
+
+  `BatteryMaintenance` continues the "no Excel source" pattern (bootstrapped from the golden file,
+  like Phase 2's reservoir curves) — and that golden file itself turned out to have an internal
+  inconsistency (a declared per-battery row count that doesn't match its actual row count), fixed
+  by making the bootstrap parser read until the next comment line rather than trusting the count.
+
+  At this scale (`plpmance.dat` alone: 2,783 plants, ~610k rows), the live Excel data has
+  measurably drifted from the checked-in golden snapshots in ways confirmed to be genuine case-data
+  evolution, not bugs — extra/missing maintenance entries where the live sheet gained or dropped
+  windows, single-cent rounding shifts at 0.005 boundaries, and (only for `plpmance.dat`, ~2% of
+  rows) a handful of plants whose maintenance date ranges shifted enough to change which blocks are
+  covered. Every test in this phase distinguishes that expected drift from an actual regression —
+  see each `test_plpman*.py`'s comments for specifics.
 
 ## Setup
 

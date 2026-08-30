@@ -36,10 +36,11 @@ actual values (not just the sheet's header labels, which are ambiguous in a coup
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import openpyxl
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from ..dat_readers import (
@@ -50,12 +51,14 @@ from ..dat_readers import (
     parse_plpcnfce,
     parse_plpdeb,
     parse_plpeta,
+    parse_plpmanbat,
     parse_plpmat,
     parse_plprun,
 )
 from .models import (
     Battery,
     BatteryInjector,
+    BatteryMaintenance,
     Bus,
     Case,
     ConsumptionWeek,
@@ -65,9 +68,13 @@ from .models import (
     IndustrialProject,
     Line,
     LineConfig,
+    LineMaintenance,
     MathParams,
     Plant,
+    PlantMaintenance,
     Reservoir,
+    ReservoirMaintenance,
+    ReservoirMinVolumeSlack,
     ReservoirPmaxCurve,
     ReservoirPmaxSegment,
     ReservoirYieldCurve,
@@ -123,6 +130,13 @@ def import_case(
     _import_consumption_and_holidays(session, case, wb)
     _import_industrial_projects(session, case, bus_by_upper_name, wb)
     _import_thermal_cost_schedule(session, case, plant_by_name, wb)
+
+    stages = session.scalars(select(Stage).where(Stage.case_id == case.id)).all()
+    _import_plant_maintenance(session, case, plant_by_name, wb)
+    _import_line_maintenance(session, case, wb)
+    _import_reservoir_maintenance(session, case, plant_by_name, wb)
+    _import_reservoir_min_volume_slack(session, case, plant_by_name, stages, wb)
+    _import_battery_maintenance(session, case, dat_block_dependant_dir)
 
     return case
 
@@ -583,4 +597,155 @@ def _import_thermal_cost_schedule(
                 cost_var=float(ws.cell(row, 10).value),
             )
         )
+    session.flush()
+
+
+def _date_range_to_stage_range(stages: list[Stage], d_start, d_end) -> tuple[int, int] | None:
+    """MantEMBh is the one Phase 4 table with no pre-merged stage-range companion — this converts
+    its raw [d_start, d_end] date range into a [stage_start, stage_end] num_eta range by finding
+    every Stage whose own date span overlaps it. Returns None if nothing overlaps (silently
+    dropped by the caller, matching the other tables' "ranges need not cover every plant/period"
+    tolerance)."""
+    matching = [
+        s.num_eta
+        for s in stages
+        if s.start_date <= d_end and d_start <= s.start_date + timedelta(days=s.duration // 24 - 1)
+    ]
+    if not matching:
+        return None
+    return min(matching), max(matching)
+
+
+def _import_plant_maintenance(session: Session, case: Case, plant_by_name: dict[str, Plant], wb) -> None:
+    """MantCEN sheet: pre-merged block-range table, columns I-M (CENTRAL/INICIAL/FINAL/MÍNIMA/
+    MÁXIMA), data from row 5. ~238k populated rows — read via `iter_rows` (much faster than
+    per-cell access at this scale) and bulk-inserted."""
+    ws = wb["MantCEN"]
+    rows = []
+    for central, ini, fin, pmin, pmax in ws.iter_rows(
+        min_row=5, min_col=9, max_col=13, values_only=True
+    ):
+        if central is None:
+            continue
+        plant = plant_by_name.get(str(central))
+        if plant is None:
+            continue
+        rows.append(
+            {
+                "case_id": case.id,
+                "plant_id": plant.id,
+                "block_start": int(ini),
+                "block_end": int(fin),
+                "pot_min": float(pmin),
+                "pot_max": float(pmax),
+            }
+        )
+    session.execute(insert(PlantMaintenance), rows)
+    session.flush()
+
+
+def _import_line_maintenance(session: Session, case: Case, wb) -> None:
+    """MantLIN sheet: pre-merged block-range table, columns I-N (LÍNEA/INICIAL/FINAL/A-B/B-A/
+    OPERATIVA), data from row 6."""
+    ws = wb["MantLIN"]
+    line_by_name = {ln.name: ln for ln in session.scalars(select(Line).where(Line.case_id == case.id))}
+    row = 6
+    while ws.cell(row, 9).value is not None:
+        name = str(ws.cell(row, 9).value)
+        line = line_by_name.get(name)
+        if line is not None:
+            session.add(
+                LineMaintenance(
+                    case_id=case.id,
+                    line_id=line.id,
+                    block_start=int(ws.cell(row, 10).value),
+                    block_end=int(ws.cell(row, 11).value),
+                    capacity_ab=float(ws.cell(row, 12).value),
+                    capacity_ba=float(ws.cell(row, 13).value),
+                    operational=str(ws.cell(row, 14).value).upper() in ("TRUE", "VERDADERO"),
+                )
+            )
+        row += 1
+    session.flush()
+
+
+def _import_reservoir_maintenance(
+    session: Session, case: Case, plant_by_name: dict[str, Plant], wb
+) -> None:
+    """MantEMB sheet: pre-merged stage-range table, columns H-L (EMBALSE/INICIAL/FINAL/MÍNIMO/
+    MÁXIMO) — already volume-valued (Hm3), data from row 6."""
+    ws = wb["MantEMB"]
+    row = 6
+    while ws.cell(row, 8).value is not None:
+        plant = plant_by_name.get(str(ws.cell(row, 8).value))
+        if plant is not None:
+            session.add(
+                ReservoirMaintenance(
+                    case_id=case.id,
+                    plant_id=plant.id,
+                    stage_start=int(ws.cell(row, 9).value),
+                    stage_end=int(ws.cell(row, 10).value),
+                    vol_min=float(ws.cell(row, 11).value),
+                    vol_max=float(ws.cell(row, 12).value),
+                )
+            )
+        row += 1
+    session.flush()
+
+
+def _import_reservoir_min_volume_slack(
+    session: Session, case: Case, plant_by_name: dict[str, Plant], stages: list[Stage], wb
+) -> None:
+    """MantEMBh sheet: raw date-range table, columns B-F (EMBALSE/INICIAL/FINAL/COTA/COSTO), data
+    from row 6 — the one Phase 4 table needing date->stage conversion (see
+    _date_range_to_stage_range). `level_min` is stored in the sheet's own Cota units; converted to
+    volume via the ported Vol_<Name> curves only at generation time (see plpminembh.dat's generator)."""
+    ws = wb["MantEMBh"]
+    row = 6
+    while ws.cell(row, 2).value is not None:
+        plant = plant_by_name.get(str(ws.cell(row, 2).value))
+        d_start = ws.cell(row, 3).value
+        d_end = ws.cell(row, 4).value
+        if plant is not None and d_start is not None and d_end is not None:
+            stage_range = _date_range_to_stage_range(stages, d_start.date(), d_end.date())
+            if stage_range is not None:
+                session.add(
+                    ReservoirMinVolumeSlack(
+                        case_id=case.id,
+                        plant_id=plant.id,
+                        stage_start=stage_range[0],
+                        stage_end=stage_range[1],
+                        level_min=float(ws.cell(row, 5).value),
+                        cost=float(ws.cell(row, 6).value),
+                    )
+                )
+        row += 1
+    session.flush()
+
+
+def _import_battery_maintenance(session: Session, case: Case, dat_block_dependant_dir: Path) -> None:
+    """plpmanbat.dat: no Excel source at all (see module docstring) — bootstrapped from the
+    golden file. Per the user's 2026-08-30 ruling (code is the rule over a mismatched sample
+    filename), this reads the checked-in `plpmantbat.dat` sample but the corresponding generator
+    writes it out as `plpmanbat.dat`, matching what genpdbaterias.f actually opens."""
+    battery_by_name = {b.plant.name: b for b in session.scalars(select(Battery).where(Battery.case_id == case.id))}
+    golden_path = dat_block_dependant_dir / "plpmantbat.dat"
+    if not golden_path.exists():
+        return
+    golden = parse_plpmanbat(golden_path.read_text(encoding="latin-1"))
+    for b in golden["batteries"]:
+        battery = battery_by_name.get(b["name"])
+        if battery is None:
+            continue
+        for row in b["data"]:
+            session.add(
+                BatteryMaintenance(
+                    case_id=case.id,
+                    battery_id=battery.id,
+                    block_start=row["num_blo"],
+                    block_end=row["num_blo"],
+                    e_min=row["e_min"],
+                    e_max=row["e_max"],
+                )
+            )
     session.flush()

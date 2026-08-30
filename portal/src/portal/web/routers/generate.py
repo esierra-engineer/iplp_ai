@@ -25,7 +25,12 @@ from ...generators import (
     plpdeb,
     plpdem,
     plpeta,
+    plpmanbat,
+    plpmance,
+    plpmanem,
+    plpmanli,
     plpmat,
+    plpminembh,
     plprun,
 )
 from ..deps import get_session, templates
@@ -48,6 +53,11 @@ GENERATORS = {
     "plpdem.dat": plpdem,
     "indhor.csv": indhor,
     "plpcosce.dat": plpcosce,
+    "plpmance.dat": plpmance,
+    "plpmanli.dat": plpmanli,
+    "plpmanem.dat": plpmanem,
+    "plpminembh.dat": plpminembh,
+    "plpmanbat.dat": plpmanbat,
 }
 
 

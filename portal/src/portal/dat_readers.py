@@ -101,6 +101,18 @@ class RecordReader:
     def at_end(self) -> bool:
         return self.pos >= len(self.lines)
 
+    def peek_is_comment(self) -> bool:
+        """True if the reader is exhausted, or the current (not-yet-consumed) line starts with
+        '#', or is blank (trailing blank lines at EOF are common and never carry data). Since the
+        actual Fortran readers never check this (see module docstring) it must never be used to
+        parse a real .dat file the same way the solver does — only as a best-effort
+        self-correction when bootstrapping from a file that turns out to have a count/content
+        mismatch (see parse_plpmanbat)."""
+        if self.at_end():
+            return True
+        stripped = self.lines[self.pos].strip()
+        return stripped == "" or stripped.startswith("#")
+
 
 # ---------------------------------------------------------------------------------------------
 # Phase 1 file parsers
@@ -334,6 +346,133 @@ def parse_indhor_csv(text: str) -> list[dict]:
             }
         )
     return rows
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 4 file parsers
+# ---------------------------------------------------------------------------------------------
+
+
+def parse_plpmance(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_cen = parse_int(r.next_tokens()[0])
+    plants = []
+    for _ in range(n_cen):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_blo, _num_ipot = r.next_tokens()[:2]
+        n_blo = parse_int(n_blo)
+        r.skip(1)
+        data = []
+        for _ in range(n_blo):
+            mes, num_blo, npot, pot_min, pot_max = r.next_tokens()[:5]
+            data.append(
+                {
+                    "num_blo": parse_int(num_blo),
+                    "pot_min": parse_float(pot_min),
+                    "pot_max": parse_float(pot_max),
+                }
+            )
+        plants.append({"name": name, "n_blo": n_blo, "data": data})
+    return {"n_cen": n_cen, "plants": plants}
+
+
+def parse_plpmanli(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_lin = parse_int(r.next_tokens()[0])
+    lines_ = []
+    for _ in range(n_lin):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_blo = parse_int(r.next_tokens()[0])
+        r.skip(1)
+        data = []
+        for _ in range(n_blo):
+            num_blo, man_a, man_b, fope = r.next_tokens()[:4]
+            data.append(
+                {
+                    "num_blo": parse_int(num_blo),
+                    "man_a": parse_float(man_a),
+                    "man_b": parse_float(man_b),
+                    "operational": parse_bool(fope),
+                }
+            )
+        lines_.append({"name": name, "n_blo": n_blo, "data": data})
+    return {"n_lin": n_lin, "lines": lines_}
+
+
+def parse_plpmanem(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_emb = parse_int(r.next_tokens()[0])
+    reservoirs = []
+    for _ in range(n_emb):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_eta = parse_int(r.next_tokens()[0])
+        r.skip(1)
+        data = []
+        for _ in range(n_eta):
+            mes, num_eta, vol_min, vol_max = r.next_tokens()[:4]
+            data.append(
+                {"num_eta": parse_int(num_eta), "vol_min": parse_float(vol_min), "vol_max": parse_float(vol_max)}
+            )
+        reservoirs.append({"name": name, "n_eta": n_eta, "data": data})
+    return {"n_emb": n_emb, "reservoirs": reservoirs}
+
+
+def parse_plpminembh(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_emb = parse_int(r.next_tokens()[0])
+    reservoirs = []
+    for _ in range(n_emb):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_eta = parse_int(r.next_tokens()[0])
+        r.skip(1)
+        data = []
+        for _ in range(n_eta):
+            num_eta, vol_min, cost = r.next_tokens()[:3]
+            data.append(
+                {"num_eta": parse_int(num_eta), "vol_min": parse_float(vol_min), "cost": parse_float(cost)}
+            )
+        reservoirs.append({"name": name, "n_eta": n_eta, "data": data})
+    return {"n_emb": n_emb, "reservoirs": reservoirs}
+
+
+def parse_plpmanbat(text: str) -> dict:
+    """NOTE: unlike every other parser in this module, this one does NOT trust the file's own
+    declared per-battery row count (`NBloMan`) — the checked-in golden `plpmantbat.dat` has at
+    least one battery whose declared count (60) doesn't match its actual row count (65), a genuine
+    inconsistency in that file (which has no Excel/VBA source at all — see db/models.py's
+    BatteryMaintenance docstring — so there was nothing to cross-check it against before now).
+    Reads rows until the next '#'-prefixed line or EOF instead, which is self-correcting for this
+    file's own actual content; the real Fortran reader (genpdbaterias.f's LeeManBat) does trust the
+    declared count blindly and would desync on this exact file the same way a naive port of this
+    parser initially did."""
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_bat = parse_int(r.next_tokens()[0])
+    batteries = []
+    for _ in range(n_bat):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        r.next_tokens()  # declared NBloMan — read past it, but see docstring: not trusted
+        r.skip(1)
+        data = []
+        while not r.peek_is_comment():
+            ind, e_min, e_max = r.next_tokens()[:3]
+            data.append({"num_blo": parse_int(ind), "e_min": parse_float(e_min), "e_max": parse_float(e_max)})
+        batteries.append({"name": name, "n_blo": len(data), "data": data})
+    return {"n_bat": n_bat, "batteries": batteries}
 
 
 # ---------------------------------------------------------------------------------------------
