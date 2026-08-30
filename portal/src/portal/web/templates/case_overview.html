@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ case.name }}{% endblock %}
+{% block content %}
+<h1>{{ case.name }}</h1>
+<p class="muted">{{ case.description or "" }}</p>
+<div class="card">
+  <p>{{ counts.buses }} buses &middot; {{ counts.lines }} lines &middot; {{ counts.stages }} stages</p>
+  <p>
+    <a class="btn" href="/cases/{{ case.id }}/buses">Buses</a>
+    <a class="btn" href="/cases/{{ case.id }}/lines">Lines</a>
+    <a class="btn" href="/cases/{{ case.id }}/stages">Stages</a>
+    <a class="btn" href="/cases/{{ case.id }}/generate">Generate .dat files</a>
+  </p>
+</div>
+{% endblock %}

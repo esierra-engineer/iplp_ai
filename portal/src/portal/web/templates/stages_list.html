@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Stages — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Stages</h1>
+<p class="muted">
+  Year/month/Etapa number aren't editable here yet — changing them would require renumbering
+  dependent blocks, which isn't wired up in Phase 1. Duration, hydrology dependence, rate factor,
+  and the block-count label are safe to edit.
+</p>
+<div style="overflow-x:auto">
+<table>
+  <thead><tr><th>Etapa</th><th>Year</th><th>Month</th><th>Duration (h)</th><th>Hydro dep.</th><th>Rate factor</th><th>Label</th><th></th></tr></thead>
+  <tbody>
+    {% for s in stages %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/stages/{{ s.id }}/update">
+        <td>{{ s.num_eta }}</td>
+        <td>{{ s.year }}</td>
+        <td>{{ s.month }}</td>
+        <td><input type="number" name="duration" value="{{ s.duration }}" style="width:6em"></td>
+        <td style="text-align:center"><input type="checkbox" name="hydro_dependent" {% if s.hydro_dependent %}checked{% endif %}></td>
+        <td><input type="number" step="any" name="rate_factor" value="{{ s.rate_factor }}" style="width:7em"></td>
+        <td><input type="text" name="label" value="{{ s.label }}" style="width:9em"></td>
+        <td><button type="submit">Save</button></td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Plants — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Plants</h1>
+<form method="get" action="/cases/{{ case.id }}/plants" class="card">
+  <select name="plant_type">
+    <option value="">All types</option>
+    {% for t in plant_types %}<option value="{{ t }}" {% if t==plant_type %}selected{% endif %}>{{ t }}</option>{% endfor %}
+  </select>
+  <input type="text" name="q" placeholder="Search name" value="{{ q }}">
+  <button type="submit">Filter</button>
+  <span class="muted">{{ total }} plants total &middot; page {{ page }} / {{ num_pages }}</span>
+</form>
+
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>cen_ind</th><th>Name</th><th>Type</th><th>Bus</th>
+      <th>Cos.Var</th><th>Rendim.</th><th>Pot.Min</th><th>Pot.Max</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in plants %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/plants/{{ p.id }}/update">
+        <td>{{ p.cen_ind }}</td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.plant_type }}</td>
+        <td>
+          <select name="bus_id">
+            <option value="">—</option>
+            {% for b in buses %}<option value="{{ b.id }}" {% if p.bus_id==b.id %}selected{% endif %}>{{ b.name }}</option>{% endfor %}
+          </select>
+        </td>
+        <td><input type="number" step="any" name="cos_var" value="{{ p.cos_var }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="rendimiento" value="{{ p.rendimiento }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="pot_min" value="{{ p.pot_min }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="pot_max" value="{{ p.pot_max }}" style="width:6em"></td>
+        <td><button type="submit">Save</button></td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p class="muted">
+  Reservoir volume curves (vol_ini/fin/min/max), cascade routing (downstream gen/vert plant), and
+  batteries' injector details aren't editable from this list yet — this covers the fields most
+  commonly adjusted between cases.
+</p>
+
+<div class="card">
+  {% if page > 1 %}<a class="btn" href="?plant_type={{ plant_type }}&q={{ q }}&page={{ page-1 }}">&laquo; Prev</a>{% endif %}
+  {% if page < num_pages %}<a class="btn" href="?plant_type={{ plant_type }}&q={{ q }}&page={{ page+1 }}">Next &raquo;</a>{% endif %}
+</div>
+{% endblock %}

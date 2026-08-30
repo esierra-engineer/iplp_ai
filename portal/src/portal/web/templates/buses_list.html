@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Buses — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Buses</h1>
+<table>
+  <thead><tr><th>Nº</th><th>Nombre</th><th colspan="2"></th></tr></thead>
+  <tbody>
+    {% for b in buses %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/buses/{{ b.id }}/update">
+        <td><input type="number" name="num_bar" value="{{ b.num_bar }}" style="width:5em" required></td>
+        <td><input type="text" name="name" value="{{ b.name }}" required></td>
+        <td><button type="submit">Save</button></td>
+        <td>
+          <button type="submit" class="danger"
+                  formaction="/cases/{{ case.id }}/buses/{{ b.id }}/delete"
+                  onclick="return confirm('Delete bus {{ b.name }}?');">Delete</button>
+        </td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="card">
+  <h3>Add bus</h3>
+  <form method="post" action="/cases/{{ case.id }}/buses">
+    <input type="number" name="num_bar" placeholder="Nº" style="width:5em" required>
+    <input type="text" name="name" placeholder="Nombre" required>
+    <button type="submit">Add</button>
+  </form>
+</div>
+{% endblock %}

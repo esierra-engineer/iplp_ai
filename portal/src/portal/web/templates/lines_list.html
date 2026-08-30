@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Lines — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Lines</h1>
+<div style="overflow-x:auto">
+<table>
+  <thead>
+    <tr>
+      <th>Name</th><th>From</th><th>To</th><th>Cap A→B</th><th>Cap B→A</th><th>kV</th>
+      <th>R (Ω)</th><th>X (Ω)</th><th>Losses</th><th>Segs</th><th>Operational</th><th colspan="2"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for l in lines %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/lines/{{ l.id }}/update">
+        <td><input type="text" name="name" value="{{ l.name }}" required style="width:16em"></td>
+        <td>
+          <select name="bus_from_id">
+            {% for b in buses %}<option value="{{ b.id }}" {% if b.id==l.bus_from_id %}selected{% endif %}>{{ b.name }}</option>{% endfor %}
+          </select>
+        </td>
+        <td>
+          <select name="bus_to_id">
+            {% for b in buses %}<option value="{{ b.id }}" {% if b.id==l.bus_to_id %}selected{% endif %}>{{ b.name }}</option>{% endfor %}
+          </select>
+        </td>
+        <td><input type="number" step="any" name="capacity_ab" value="{{ l.capacity_ab }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="capacity_ba" value="{{ l.capacity_ba }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="voltage_kv" value="{{ l.voltage_kv }}" style="width:5em"></td>
+        <td><input type="number" step="any" name="resistance" value="{{ l.resistance }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="reactance" value="{{ l.reactance }}" style="width:6em"></td>
+        <td style="text-align:center"><input type="checkbox" name="models_losses" {% if l.models_losses %}checked{% endif %}></td>
+        <td><input type="number" name="num_segments" value="{{ l.num_segments }}" style="width:3.5em"></td>
+        <td style="text-align:center"><input type="checkbox" name="operational" {% if l.operational %}checked{% endif %}></td>
+        <td><button type="submit">Save</button></td>
+        <td>
+          <button type="submit" class="danger"
+                  formaction="/cases/{{ case.id }}/lines/{{ l.id }}/delete"
+                  onclick="return confirm('Delete line {{ l.name }}?');">Delete</button>
+        </td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div class="card">
+  <h3>Add line</h3>
+  <form method="post" action="/cases/{{ case.id }}/lines">
+    <input type="text" name="name" placeholder="Name" required>
+    <select name="bus_from_id" required>{% for b in buses %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select>
+    <select name="bus_to_id" required>{% for b in buses %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select>
+    <input type="number" step="any" name="capacity_ab" placeholder="Cap A→B" required style="width:7em">
+    <input type="number" step="any" name="capacity_ba" placeholder="Cap B→A" required style="width:7em">
+    <input type="number" step="any" name="voltage_kv" placeholder="kV" required style="width:5em">
+    <input type="number" step="any" name="resistance" placeholder="R (Ω)" required style="width:6em">
+    <input type="number" step="any" name="reactance" placeholder="X (Ω)" required style="width:6em">
+    <label><input type="checkbox" name="models_losses" checked> Losses</label>
+    <input type="number" name="num_segments" value="1" style="width:3.5em">
+    <label><input type="checkbox" name="operational" checked> Operational</label>
+    <button type="submit">Add</button>
+  </form>
+</div>
+{% endblock %}

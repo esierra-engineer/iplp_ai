@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Cases{% endblock %}
+{% block content %}
+<h1>Cases</h1>
+<table>
+  <thead><tr><th>Name</th><th>Description</th><th></th></tr></thead>
+  <tbody>
+    {% for c in cases %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td class="muted">{{ c.description or "" }}</td>
+      <td><a class="btn" href="/cases/{{ c.id }}">Open</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">No cases yet. Run the migration importer to create one from an .xlsm.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

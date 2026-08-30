@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Batteries — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Batteries</h1>
+<div style="overflow-x:auto">
+<table>
+  <thead><tr><th>Ind</th><th>Name</th><th>Bus</th><th>Discharge loss factor</th><th>Cap. Min (MWh)</th><th>Cap. Max (MWh)</th><th>Injectors</th><th></th></tr></thead>
+  <tbody>
+    {% for b in batteries %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/batteries/{{ b.id }}/update">
+        <td>{{ b.bat_ind }}</td>
+        <td>{{ b.plant.name }}</td>
+        <td>{{ b.bus.name }}</td>
+        <td><input type="number" step="any" name="discharge_loss_factor" value="{{ b.discharge_loss_factor }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="capacity_min" value="{{ b.capacity_min }}" style="width:6em"></td>
+        <td><input type="number" step="any" name="capacity_max" value="{{ b.capacity_max }}" style="width:6em"></td>
+        <td class="muted">{{ b.injectors | map(attribute='name') | join(', ') }}</td>
+        <td><button type="submit">Save</button></td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

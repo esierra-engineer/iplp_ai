@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Generate — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Generate .dat files</h1>
+<p class="muted">
+  Replaces running the <code>Archivo_NN</code> VBA macros in Excel — regenerates every file
+  implemented so far straight from this case's database.
+</p>
+<div class="card">
+  <a class="btn" href="/cases/{{ case.id }}/generate/download.zip">Download all as .zip</a>
+</div>
+<table>
+  <thead><tr><th>File</th><th></th></tr></thead>
+  <tbody>
+    {% for f in filenames %}
+    <tr>
+      <td>{{ f }}</td>
+      <td><a href="/cases/{{ case.id }}/generate/preview/{{ f }}" target="_blank">Preview</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
