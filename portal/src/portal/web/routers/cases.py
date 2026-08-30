@@ -5,8 +5,9 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ...case_clone import clone_case
+from ...case_clone import clone_case_file
 from ...db.models import Bus, Case, Line, Plant, Stage
+from ...db.registry import list_case_files
 from ..deps import get_session, templates
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -17,8 +18,11 @@ def _count(session: Session, model, case_id: int) -> int:
 
 
 @router.get("")
-def list_cases(request: Request, session: Session = Depends(get_session)):
-    cases = session.scalars(select(Case).order_by(Case.id)).all()
+def list_cases(request: Request):
+    # Each case is its own file now (see db/registry.py) — the list comes from the registry, not
+    # any one case's own database. CaseFile already exposes the same id/name/description attributes
+    # cases_list.html expects from a Case row, so the template is unchanged.
+    cases = list_case_files()
     return templates.TemplateResponse(request, "cases_list.html", {"cases": cases})
 
 
@@ -41,8 +45,6 @@ def clone(
     case_id: int,
     new_name: str = Form(...),
     description: str = Form(""),
-    session: Session = Depends(get_session),
 ):
-    new_case = clone_case(session, case_id, new_name, description or None)
-    session.commit()
-    return RedirectResponse(f"/cases/{new_case.id}?msg=Cloned+from+case+{case_id}", status_code=303)
+    new_id = clone_case_file(case_id, new_name, description or None)
+    return RedirectResponse(f"/cases/{new_id}?msg=Cloned+from+case+{case_id}", status_code=303)

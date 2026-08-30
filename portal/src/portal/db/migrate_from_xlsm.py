@@ -166,10 +166,17 @@ def import_case(
     dat_static_dir: Path | None = None,
     dat_block_dependant_dir: Path | None = None,
     description: str | None = None,
+    case_id: int | None = None,
 ) -> Case:
+    """`case_id`, when given, is used as the new Case row's explicit primary key instead of letting
+    SQLite autoincrement assign one — needed when this case gets its own dedicated SQLite file (see
+    db/registry.py) and must carry the same id the registry already allocated it, so URLs/generator
+    calls elsewhere don't need to know that file's own internal id separately."""
     wb = openpyxl.load_workbook(xlsm_path, data_only=True, keep_vba=False)
 
-    case = Case(name=case_name, description=description)
+    case = Case(id=case_id, name=case_name, description=description) if case_id is not None else Case(
+        name=case_name, description=description
+    )
     session.add(case)
     session.flush()  # assign case.id
 

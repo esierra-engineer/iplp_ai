@@ -1,8 +1,12 @@
 """SQLAlchemy engine/session wiring.
 
-One SQLite file backs every case; each domain table is scoped by ``case_id``
-(see db/models.py) rather than one database per case, so cases can share
-reference data or be cloned/diffed without juggling separate files.
+Historically one shared SQLite file backed every case (each domain table scoped by ``case_id``,
+see db/models.py). As of the 2026-08-30 "every case is a sqlite file" change, the web app and CLI
+instead give each case its own dedicated file under ``cases/`` (see db/registry.py) — `make_engine`/
+`DEFAULT_DB_PATH`/`_engine`/`SessionLocal` below are kept as-is purely for the test suite (which
+seeds one ad-hoc on-disk DB per test session directly via `make_engine`, bypassing the registry
+entirely) and any other direct single-file use; `get_engine_for_path` is what the per-case-file web
+layer actually uses.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -25,6 +30,20 @@ def make_engine(db_path: str = DEFAULT_DB_PATH):
 
 _engine = make_engine()
 SessionLocal = sessionmaker(bind=_engine, future=True, expire_on_commit=False)
+
+# One SQLAlchemy engine (connection pool) per case file, reused across requests instead of
+# reopening the SQLite file on every call — keyed by resolved absolute path.
+_case_engine_cache: dict[str, "Engine"] = {}  # noqa: F821 (Engine imported lazily below only for typing)
+
+
+def get_engine_for_path(path: str | Path):
+    """Return the (cached) engine for a specific case file, creating it on first use."""
+    key = str(Path(path).resolve())
+    engine = _case_engine_cache.get(key)
+    if engine is None:
+        engine = make_engine(key)
+        _case_engine_cache[key] = engine
+    return engine
 
 
 @contextmanager

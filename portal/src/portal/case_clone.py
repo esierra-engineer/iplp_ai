@@ -1,4 +1,15 @@
-"""Generic case cloning: duplicate every table's rows for one case into a new case.
+"""Generic case cloning.
+
+`clone_case` (below) duplicates every table's rows for one case into a *new case row in the same
+database* — still useful as a library capability (e.g. merging one case into an existing
+multi-case file), and still fully tested, but no longer what the web UI's "clone" action uses.
+`clone_case_file`, at the bottom of this module, is what the web UI uses now that every case is its
+own SQLite file (see db/registry.py): it copies the whole file and rewrites `case_id` in place,
+which is simpler and cheaper than row-by-row copying since every *other* primary key can stay
+exactly as-is — a raw file copy already gives every child row a byte-identical copy.
+
+Original `clone_case` docstring, still accurate for that function: duplicate every table's rows for
+one case into a new case.
 
 Rather than hand-writing per-table copy/remap logic for the ~30 domain tables (which would need
 updating every time a phase adds a table), this walks `Base.metadata.sorted_tables` — SQLAlchemy's
@@ -18,10 +29,13 @@ logic as the "no case_id" tables below).
 
 from __future__ import annotations
 
-from sqlalchemy import Table, insert, select
+import shutil
+
+from sqlalchemy import Table, create_engine, insert, select, update
 from sqlalchemy.orm import Session
 
 from .db.models import Base, Case
+from .db.registry import register_case, resolve_case_path
 
 
 def clone_case(session: Session, source_case_id: int, new_name: str, description: str | None = None) -> Case:
@@ -102,6 +116,45 @@ def clone_case(session: Session, source_case_id: int, new_name: str, description
     session.flush()
     _fix_self_referential_fks(session, id_maps)
     return new_case
+
+
+def clone_case_file(source_case_id: int, new_name: str, description: str | None = None) -> int:
+    """One-file-per-case cloning: allocate a new case_id + file via the registry, copy the source
+    case's file byte-for-byte, then rewrite every `case_id` column (including the "case" table's
+    own `id`, and the handful of tables — MathParams/DebugParams/RunParams/LineConfig — where
+    case_id itself is the primary key) from the old id to the new one. No other primary key needs
+    remapping: the file copy already gave every other row (plant.id, bus.id, ...) an identical,
+    still-internally-consistent copy. Returns the new case_id."""
+    source_path = resolve_case_path(source_case_id)
+    if source_path is None or not source_path.exists():
+        raise ValueError(f"no case with id {source_case_id}")
+
+    new_id, new_path = register_case(new_name, description)
+    shutil.copy2(source_path, new_path)
+
+    engine = create_engine(f"sqlite:///{new_path}", future=True)
+    try:
+        with engine.begin() as conn:
+            case_table = Base.metadata.tables["case"]
+            conn.execute(
+                update(case_table)
+                .where(case_table.c.id == source_case_id)
+                .values(
+                    id=new_id,
+                    name=new_name,
+                    description=description or f"Cloned from case {source_case_id}",
+                )
+            )
+            for table in Base.metadata.sorted_tables:
+                if table.name == "case" or "case_id" not in table.columns:
+                    continue
+                conn.execute(
+                    update(table).where(table.c.case_id == source_case_id).values(case_id=new_id)
+                )
+    finally:
+        engine.dispose()
+
+    return new_id
 
 
 def _find_scoping_fk(table: Table, id_maps: dict[str, dict[int, int]]) -> tuple[str | None, str | None]:

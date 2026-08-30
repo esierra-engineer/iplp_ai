@@ -1,8 +1,8 @@
 """portal — SQLite + Python + web replacement for the PLP Excel/VBA case-data authoring pipeline.
 
-CLI entry point (`uv run portal import-xlsm ...`) seeds the real app database (see db/session.py's
-PORTAL_DB_PATH) from a case's .xlsm and current golden .dat files, for use with the web app
-(`uv run uvicorn portal.web.app:app --reload`).
+CLI entry point (`uv run portal import-xlsm ...`) creates a new, dedicated SQLite file for the case
+under `cases/` (see db/registry.py) from a case's .xlsm and, optionally, its current golden .dat
+files, for use with the web app (`uv run uvicorn portal.web.app:app --reload`).
 """
 
 from __future__ import annotations
@@ -39,12 +39,18 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "import-xlsm":
+        from sqlalchemy.orm import sessionmaker
+
         from .db.migrate_from_xlsm import import_case
         from .db.models import Base
-        from .db.session import SessionLocal, _engine
+        from .db.registry import CASES_DIR, register_case
+        from .db.session import get_engine_for_path
 
-        Base.metadata.create_all(_engine)
-        with SessionLocal() as session:
+        case_id, db_path = register_case(args.name, args.description)
+        engine = get_engine_for_path(db_path)
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine, future=True)
+        with Session() as session:
             case = import_case(
                 session,
                 case_name=args.name,
@@ -52,6 +58,8 @@ def main() -> None:
                 dat_static_dir=args.dat_static,
                 dat_block_dependant_dir=args.dat_block_dependant,
                 description=args.description,
+                case_id=case_id,
             )
             session.commit()
-            print(f"Imported case {case.name!r} (id={case.id})")
+            print(f"Imported case {case.name!r} (id={case.id}) -> {db_path}")
+        print(f"(all cases live under {CASES_DIR})")

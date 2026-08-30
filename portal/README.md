@@ -164,7 +164,31 @@ silently assumed correct. Everything else — including all 234 block durations,
 from the Etapas sheet's own per-block hour-count columns rather than a golden file — imports fully
 either way.
 
-Writes to `portal.sqlite3` at the project root (override with `PORTAL_DB_PATH`).
+## Every case is its own SQLite file
+
+Each case gets its own dedicated file under `cases/` (e.g. `cases/IPLP20251001_c00.sqlite3`),
+named/created fresh by `import-xlsm` above — not a row alongside other cases in one shared
+database. A tiny separate registry database (`cases/_registry.sqlite3`, see `db/registry.py`)
+indexes which file each case_id lives in; it holds only id/name/description/file_name, never case
+data itself, and can be reconstructed from the case files themselves if it's ever lost. Override
+where cases live with `PORTAL_CASES_DIR` (defaults to `<project root>/cases/`). The web app's
+"Clone" action copies the whole file and rewrites `case_id` in place (see `case_clone.clone_case_file`)
+rather than copying rows within a shared database — `case_clone.clone_case` (the original,
+row-by-row implementation) still exists as a library function for cloning *within* one multi-case
+file, if that's ever needed again, and remains fully tested.
+
+`db/session.py`'s `make_engine`/`DEFAULT_DB_PATH`/`portal.sqlite3` (override with `PORTAL_DB_PATH`)
+are unrelated legacy single-file plumbing kept only because the test suite seeds one ad-hoc on-disk
+database directly per test session — no longer what `import-xlsm` or the web app actually use.
+
+**On the "second, transformed database" idea**: rather than a literal second SQLite file (xlsm ->
+DB1 (editable) -> transform -> DB2 (computed) -> .dat), the same separation is achieved with one
+database per case plus compute-on-demand generation — `generators/*.py` already compute every
+derived value straight from DB1's raw/editable data at `.dat`-generation time (`demand_calc.py` is
+the fullest example: it derives per-bus demand from DB1's normalized shapes + weekly targets on
+every call, nothing precomputed and stored). A second physical database would mean keeping it in
+sync with every edit made through the web UI — extra invalidation logic for no real benefit, since
+regenerating a `.dat` file is already fast enough to do on demand.
 
 ## Run the web app
 
