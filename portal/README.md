@@ -5,7 +5,7 @@ authors PLP model case data and generates the `.dat` files the PLP solver reads.
 `/home/erick/.claude/plans/ethereal-scribbling-tiger.md` for the full phased plan; this covers
 what's implemented so far.
 
-## Status: Phase 0 + 1 + 2 + 3 + 4 + 5 + 6 complete
+## Status: All 7 phases complete
 
 - **Phase 0** — `curves/reservoir_volume.py`: the 15 `Vol_<Name>` reservoir level→volume rating
   curves ported from `xla/FUNCCDEC_CDEC.xla`, needed by Phase 4's maintenance generators.
@@ -110,6 +110,28 @@ what's implemented so far.
   sequence of physical lines (comment or data, tagged), replayed verbatim by the generator — still
   real editable data (each line is a plain editable text field), and correct by construction, since
   bootstrapping and regenerating is an exact round-trip with no transformation logic to get wrong.
+- **Phase 7** — web UI completion & case management:
+  - `case_clone.py`: generic case cloning. Rather than hand-writing copy/remap logic for the ~30
+    domain tables (updating it every time a phase adds one), it walks
+    `Base.metadata.sorted_tables` (SQLAlchemy's own FK-dependency topological order) and generically
+    copies each table's rows, remapping foreign keys via an old-id -> new-id map built as it goes —
+    including tables scoped only *transitively* (`reservoir.plant_id -> plant.case_id`, no direct
+    `case_id` column) and the one self-referential FK (`Plant.downstream_gen/vert_plant_id`, fixed
+    up in a second pass once the full plant id-map is known). Verified against every one of the
+    ~30 tables: row counts match exactly, and the self-referential FK correctly re-targets the new
+    case's own copy of the referenced plant, not the source case's.
+  - Basin Conventions web UI (Ralco/Extraction/Filtration/SpillVolume tables, plus a per-line editor
+    for the Maule/Laja convention files) — the one set of Phase 6 tables that hadn't gotten a UI yet.
+  - A "Clone this case" action on the case overview page.
+
+  Not attempted, and worth being explicit about rather than silently thin: a full CRUD editor for
+  every bulk table (demand shapes, maintenance ranges, inflow curves, hydrology scenarios) — those
+  are already covered by direct DB access and the generator pipeline, but a hundred-thousand-row
+  table isn't a good fit for a plain HTML form either way; a dedicated grid UI for those is future
+  work, not a gap in this phase's scope. Same for porting the VBA's own pre-generation validation
+  checks (e.g. Archivo_06's future-cost-curve check) as inline web-form feedback — most of those
+  guard files (`plpplaem.dat` and similar) that turned out to be out of scope for this case's
+  active feature set in the first place (see Phase 2/6 notes above).
 
 ## Setup
 
@@ -156,16 +178,30 @@ per-file preview/test path doesn't, since each test should be able to run standa
 
 ## Known bootstrap limitations (tracked, not hidden)
 
-A few fields are seeded straight from the case's *existing* golden `.dat` files rather than derived
-from the `.xlsm`, because the derivation logic is out of scope so far, or (for two files) because
-no Excel/VBA source exists at all — see `db/migrate_from_xlsm.py`'s module docstring for the full
-list and why. In short: `Stage.hydro_dependent`/`Stage.rate_factor`, all `Block` durations, the
-three solver-control files' values, `Reservoir.f_esc`, and all of `plpcenre.dat`/`plpcenpmax.dat`.
-A from-scratch case with no pre-existing `.dat` files will need those derivations ported first
-(for `plpcenre.dat`/`plpcenpmax.dat`, "ported" means "sourced from wherever this data is actually
-maintained" — there's no VBA logic to port, since none was ever there).
+A number of fields/tables are seeded straight from the case's *existing* golden `.dat` files rather
+than derived from the `.xlsm` — see each `db/migrate_from_xlsm.py` import function's docstring for
+the specific reason in each case. They fall into two different situations, worth telling apart:
+
+1. **Genuinely out of scope so far**: `Stage.hydro_dependent`/`Stage.rate_factor` and all `Block`
+   durations (deriving these needs VBA logic not ported in this project) — a from-scratch case with
+   no pre-existing `.dat` files will need that derivation ported before these two are correct for
+   it.
+2. **No Excel/VBA source exists at all**, confirmed by direct inspection (not assumed): the three
+   solver-control files, `Reservoir.f_esc`, all of `plpcenre.dat`/`plpcenpmax.dat`
+   (Phase 2); all of Phase 5's hydrology tables (`plpaflce.dat`/`plpidsim.dat`/`plpidape.dat`/
+   `plpidap2.dat` — VBA's own `Rnd` PRNG isn't reproducible, so there was never an algorithm to
+   port, not just one left undone); `BatteryMaintenance` (Phase 4); `RalcoConvention`/
+   `ExtractionPoint`/`ReservoirFiltration`/`ReservoirSpillVolume` (Phase 6 — the sheets the VBA
+   writers reference don't exist anywhere in the current workbook, hidden sheets included). For
+   these, "porting the derivation" doesn't mean anything — bootstrapping *is* the mechanism, since
+   there's nowhere else this data could come from. A from-scratch case needs this data supplied
+   directly (by hand, or from wherever it's actually maintained outside this workbook).
+
+`plpmaulen.dat`/`plplajam.dat` are a third, distinct case: real current sheets (`MAULEN`/`LAJAM`)
+exist, but are stored as a verbatim line sequence rather than parsed field-by-field — a deliberate
+scoping choice (see Phase 6 above), not a source limitation the same way the other two categories are.
 
 Per the user's decision (2026-08-30): where this repo's `plp_cen` checkout of the solver disagrees
 with a checked-in sample filename, **the code is the rule** — the sample's name is taken as the
 error. This resolved the `plpmanbat.dat` (code) vs `plpmantbat.dat` (sample) mismatch flagged
-after Phase 1: Phase 4's battery-maintenance generator should write `plpmanbat.dat`.
+after Phase 1: Phase 4's battery-maintenance generator writes `plpmanbat.dat`.

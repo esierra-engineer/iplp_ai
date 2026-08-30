@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ convention }} convention — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>{{ convention }} convention lines</h1>
+<p class="muted">
+  Each row is one physical line of the generated file, in order. Comment lines (greyed out) are
+  never actually parsed by the solver — only their count/position matters — so editing them is
+  purely cosmetic. Data lines carry the file's real values.
+</p>
+<table>
+  <thead><tr><th>#</th><th>Text</th><th></th></tr></thead>
+  <tbody>
+    {% for l in lines %}
+    <tr {% if l.is_comment %}style="color:#888"{% endif %}>
+      <td>{{ l.line_order }}</td>
+      <form method="post" action="/cases/{{ case.id }}/basin-conventions/line/{{ l.id }}/update">
+        <td><input type="text" name="text" value="{{ l.text }}" style="width:44em; font-family:monospace;"></td>
+        <td><button type="submit">Save</button></td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -4,12 +4,29 @@
 <h1>{{ case.name }}</h1>
 <p class="muted">{{ case.description or "" }}</p>
 <div class="card">
-  <p>{{ counts.buses }} buses &middot; {{ counts.lines }} lines &middot; {{ counts.stages }} stages</p>
+  <p>{{ counts.buses }} buses &middot; {{ counts.lines }} lines &middot; {{ counts.stages }} stages
+     &middot; {{ counts.plants }} plants</p>
   <p>
     <a class="btn" href="/cases/{{ case.id }}/buses">Buses</a>
     <a class="btn" href="/cases/{{ case.id }}/lines">Lines</a>
     <a class="btn" href="/cases/{{ case.id }}/stages">Stages</a>
+    <a class="btn" href="/cases/{{ case.id }}/plants">Plants</a>
+    <a class="btn" href="/cases/{{ case.id }}/batteries">Batteries</a>
+    <a class="btn" href="/cases/{{ case.id }}/projects">Projects</a>
+    <a class="btn" href="/cases/{{ case.id }}/thermal-costs">Thermal Costs</a>
+    <a class="btn" href="/cases/{{ case.id }}/basin-conventions">Basin Conventions</a>
     <a class="btn" href="/cases/{{ case.id }}/generate">Generate .dat files</a>
   </p>
+</div>
+
+<div class="card">
+  <h3>Clone this case</h3>
+  <p class="muted">Copies every table (topology, plants, demand, maintenance, hydrology, basin
+  conventions — everything) into a brand-new case, so you can try changes without touching this one.</p>
+  <form method="post" action="/cases/{{ case.id }}/clone">
+    <input type="text" name="new_name" placeholder="New case name" required style="width:16em">
+    <input type="text" name="description" placeholder="Description (optional)" style="width:20em">
+    <button type="submit">Clone</button>
+  </form>
 </div>
 {% endblock %}

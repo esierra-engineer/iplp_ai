@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Basin Conventions — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Basin Conventions</h1>
+
+<div class="card">
+  <h3>Maule / Laja conventions</h3>
+  <p class="muted">Stored as their exact ordered line sequence (see README) — edit any line's raw text.</p>
+  <a class="btn" href="/cases/{{ case.id }}/basin-conventions/MAULE/lines">Maule convention lines</a>
+  <a class="btn" href="/cases/{{ case.id }}/basin-conventions/LAJA/lines">Laja convention lines</a>
+</div>
+
+{% if ralco %}
+<div class="card">
+  <h3>Ralco discharge-restriction curve</h3>
+  <p>{{ ralco.plant.name }} &middot; {{ ralco.segments | length }} segments</p>
+  <table>
+    <thead><tr><th>Volume</th><th>b</th><th>a</th></tr></thead>
+    <tbody>
+      {% for seg in ralco.segments %}
+      <tr><td>{{ seg.volume }}</td><td>{{ seg.b }}</td><td>{{ seg.a }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Extraction points ({{ extraction_points | length }})</h3>
+  <table>
+    <thead><tr><th>Source</th><th>Downstream</th><th>Max extraction (m3/s)</th><th></th></tr></thead>
+    <tbody>
+      {% for p in extraction_points %}
+      <tr>
+        <form method="post" action="/cases/{{ case.id }}/basin-conventions/extraction/{{ p.id }}/update">
+          <td>{{ p.source_plant.name }}</td>
+          <td>{{ p.downstream_plant.name }}</td>
+          <td><input type="number" step="any" name="max_extraction" value="{{ p.max_extraction }}" style="width:6em"></td>
+          <td><button type="submit">Save</button></td>
+        </form>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Reservoir filtrations ({{ filtrations | length }})</h3>
+  <table>
+    <thead><tr><th>Reservoir</th><th>Downstream</th><th>Avg. filtration</th><th>Segments</th><th></th></tr></thead>
+    <tbody>
+      {% for f in filtrations %}
+      <tr>
+        <form method="post" action="/cases/{{ case.id }}/basin-conventions/filtration/{{ f.id }}/update">
+          <td>{{ f.plant.name }}</td>
+          <td>{{ f.downstream_plant.name }}</td>
+          <td><input type="number" step="any" name="avg_filtration" value="{{ f.avg_filtration }}" style="width:6em"></td>
+          <td class="muted">{{ f.segments | length }}</td>
+          <td><button type="submit">Save</button></td>
+        </form>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Reservoir spill volumes ({{ spill_volumes | length }})</h3>
+  <table>
+    <thead><tr><th>Reservoir</th><th>Spill volume [10^3 m3]</th><th>Cost</th><th></th></tr></thead>
+    <tbody>
+      {% for s in spill_volumes %}
+      <tr>
+        <form method="post" action="/cases/{{ case.id }}/basin-conventions/spill-volume/{{ s.id }}/update">
+          <td>{{ s.plant.name }}</td>
+          <td><input type="number" step="any" name="spill_volume" value="{{ s.spill_volume }}" style="width:8em"></td>
+          <td><input type="number" step="any" name="cost" value="{{ s.cost }}" style="width:6em"></td>
+          <td><button type="submit">Save</button></td>
+        </form>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
