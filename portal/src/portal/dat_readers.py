@@ -555,6 +555,96 @@ def parse_plpidap2(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
+# Phase 6 file parsers
+# ---------------------------------------------------------------------------------------------
+
+
+def parse_plpralco(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    name = parse_name(r.next_tokens()[0])
+    r.skip(1)
+    n_seg = parse_int(r.next_tokens()[0])
+    r.skip(1)
+    segments = []
+    for _ in range(n_seg):
+        vol, b, a = r.next_tokens()[:3]
+        segments.append({"volume": parse_float(vol), "b": parse_float(b), "a": parse_float(a)})
+    return {"name": name, "segments": segments}
+
+
+def parse_plpextrac(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_cen = parse_int(r.next_tokens()[0])
+    points = []
+    for _ in range(n_cen):
+        r.skip(1)
+        source = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        max_extr = parse_float(r.next_tokens()[0])
+        r.skip(1)
+        downstream = parse_name(r.next_tokens()[0])
+        points.append({"source": source, "max_extraction": max_extr, "downstream": downstream})
+    return {"n_cen": n_cen, "points": points}
+
+
+def parse_plpfilemb(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_cen = parse_int(r.next_tokens()[0])
+    reservoirs = []
+    for _ in range(n_cen):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        avg = parse_float(r.next_tokens()[0])
+        r.skip(1)
+        n_tramo = parse_int(r.next_tokens()[0])
+        r.skip(1)
+        segments = []
+        for _ in range(n_tramo):
+            ind, vol, pend, const = r.next_tokens()[:4]
+            segments.append(
+                {"volume": parse_float(vol), "slope": parse_float(pend), "constant": parse_float(const)}
+            )
+        r.skip(1)
+        downstream = parse_name(r.next_tokens()[0])
+        reservoirs.append(
+            {"name": name, "avg_filtration": avg, "segments": segments, "downstream": downstream}
+        )
+    return {"n_cen": n_cen, "reservoirs": reservoirs}
+
+
+def parse_plpvrebemb(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_emb = parse_int(r.next_tokens()[0])
+    reservoirs = []
+    for _ in range(n_emb):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        vol = parse_float(r.next_tokens()[0])
+        r.skip(1)
+        cost = parse_float(r.next_tokens()[0])
+        reservoirs.append({"name": name, "spill_volume": vol, "cost": cost})
+    return {"n_emb": n_emb, "reservoirs": reservoirs}
+
+
+def parse_lines_raw(text: str) -> list[dict]:
+    """Generic bootstrap parser for plpmaulen.dat/plplajam.dat: every physical line, tagged as a
+    comment (starts with '#') or data line, in original order — see db/models.py's
+    BasinConventionLine docstring for why these two files are stored/replayed this way rather than
+    as individually-typed fields."""
+    return [
+        {"is_comment": line.lstrip().startswith("#"), "text": line}
+        for line in text.splitlines()
+        if line.strip() != ""
+    ]
+
+
+# ---------------------------------------------------------------------------------------------
 # Phase 2 file parsers
 # ---------------------------------------------------------------------------------------------
 

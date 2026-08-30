@@ -44,6 +44,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from ..dat_readers import (
+    parse_lines_raw,
     parse_plpaflce,
     parse_plpblo,
     parse_plpcenbat,
@@ -52,19 +53,25 @@ from ..dat_readers import (
     parse_plpcnfce,
     parse_plpdeb,
     parse_plpeta,
+    parse_plpextrac,
+    parse_plpfilemb,
     parse_plpidap2,
     parse_plpidape,
     parse_plpidsim,
     parse_plpmanbat,
     parse_plpmat,
+    parse_plpralco,
     parse_plprun,
+    parse_plpvrebemb,
 )
 from .models import (
     ApertureIndexAggregate,
     ApertureIndexSimulation,
+    BasinConventionLine,
     Battery,
     BatteryInjector,
     BatteryMaintenance,
+    ExtractionPoint,
     Bus,
     Case,
     ConsumptionWeek,
@@ -80,11 +87,14 @@ from .models import (
     MathParams,
     Plant,
     PlantMaintenance,
+    RalcoConvention,
     Reservoir,
+    ReservoirFiltration,
     ReservoirMaintenance,
     ReservoirMinVolumeSlack,
     ReservoirPmaxCurve,
     ReservoirPmaxSegment,
+    ReservoirSpillVolume,
     ReservoirYieldCurve,
     ReservoirYieldSegment,
     RunParams,
@@ -148,6 +158,8 @@ def import_case(
 
     stage_by_num = {s.num_eta: s for s in stages}
     _import_hydrology(session, case, plant_by_name, stage_by_num, dat_block_dependant_dir)
+
+    _import_basin_conventions(session, case, plant_by_name, dat_static_dir)
 
     return case
 
@@ -827,6 +839,82 @@ def _import_hydrology(
             if stage is not None:
                 session.add(
                     ApertureIndexAggregate(case_id=case.id, stage_id=stage.id, apertures=s["apertures"])
+                )
+
+    session.flush()
+
+
+def _import_basin_conventions(
+    session: Session, case: Case, plant_by_name: dict[str, Plant], dat_static_dir: Path
+) -> None:
+    """plpralco.dat/plpextrac.dat/plpfilemb.dat/plpvrebemb.dat: no Excel source at all (see
+    db/models.py's Phase 6 section docstring) — bootstrapped from the golden files, matched to
+    Plant by name. plpmaulen.dat/plplajam.dat: real sheets exist but are stored as a verbatim
+    ordered line sequence instead (see BasinConventionLine's docstring for why)."""
+
+    def _read(name: str) -> str | None:
+        path = dat_static_dir / name
+        return path.read_text(encoding="latin-1") if path.exists() else None
+
+    if (text := _read("plpralco.dat")) is not None:
+        d = parse_plpralco(text)
+        plant = plant_by_name.get(d["name"])
+        if plant is not None:
+            session.add(RalcoConvention(case_id=case.id, plant_id=plant.id, segments=d["segments"]))
+
+    if (text := _read("plpextrac.dat")) is not None:
+        for p in parse_plpextrac(text)["points"]:
+            source = plant_by_name.get(p["source"])
+            downstream = plant_by_name.get(p["downstream"])
+            if source is not None and downstream is not None:
+                session.add(
+                    ExtractionPoint(
+                        case_id=case.id,
+                        source_plant_id=source.id,
+                        downstream_plant_id=downstream.id,
+                        max_extraction=p["max_extraction"],
+                    )
+                )
+
+    if (text := _read("plpfilemb.dat")) is not None:
+        for r in parse_plpfilemb(text)["reservoirs"]:
+            plant = plant_by_name.get(r["name"])
+            downstream = plant_by_name.get(r["downstream"])
+            if plant is not None and downstream is not None:
+                session.add(
+                    ReservoirFiltration(
+                        case_id=case.id,
+                        plant_id=plant.id,
+                        downstream_plant_id=downstream.id,
+                        avg_filtration=r["avg_filtration"],
+                        segments=r["segments"],
+                    )
+                )
+
+    if (text := _read("plpvrebemb.dat")) is not None:
+        for r in parse_plpvrebemb(text)["reservoirs"]:
+            plant = plant_by_name.get(r["name"])
+            if plant is not None:
+                session.add(
+                    ReservoirSpillVolume(
+                        case_id=case.id,
+                        plant_id=plant.id,
+                        spill_volume=r["spill_volume"],
+                        cost=r["cost"],
+                    )
+                )
+
+    for convention, filename in (("MAULE", "plpmaulen.dat"), ("LAJA", "plplajam.dat")):
+        if (text := _read(filename)) is not None:
+            for i, line in enumerate(parse_lines_raw(text)):
+                session.add(
+                    BasinConventionLine(
+                        case_id=case.id,
+                        convention=convention,
+                        line_order=i,
+                        is_comment=line["is_comment"],
+                        text=line["text"],
+                    )
                 )
 
     session.flush()

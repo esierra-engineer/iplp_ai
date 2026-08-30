@@ -681,3 +681,102 @@ class ApertureIndexAggregate(Base):
     apertures: Mapped[list[int]] = mapped_column(JSON)
 
     stage: Mapped[Stage] = relationship()
+
+
+# =================================================================================================
+# Phase 6 — basin conventions & remaining static files
+# =================================================================================================
+#
+# plpralco.dat, plpextrac.dat, plpfilemb.dat, plpvrebemb.dat have NO Excel source in the current
+# workbook at all (confirmed: none of RestRalco/EXTRACCIONES/FILTRACIONES/REBVERT — the sheets the
+# VBA writers reference — exist, hidden or visible, in this workbook) — bootstrapped from the
+# golden files, same mechanism as Phase 2's reservoir curves. Extraction/Filtration/SpillVolume are
+# still modeled as proper normalized tables (repeating records referencing Plant) since that's a
+# natural fit and a real editing UI benefits from it; Ralco is a single reservoir's own curve.
+#
+# plpmaulen.dat/plplajam.dat DO have real, current sheets (MAULEN/LAJAM) — but each is ~90-100
+# sequential fields of several different shapes (scalars, 12-month curves, variable-length name
+# lists, "manual override by year" blocks whose row count can be zero) with no consistent
+# structure to generalize, and both are rarely-edited basin operating agreements rather than
+# per-case tunable data. Mapping every field individually would be disproportionate effort for
+# that edit frequency, so — a deliberate scoping choice, not a workaround — BasinConventionLine
+# stores each file as its exact ordered sequence of physical lines (comment or data, tagged),
+# replayed verbatim by the generator. This is still real editable data (each line's raw text is a
+# plain editable field) and is correct by construction: bootstrapping and regenerating is an exact
+# round-trip with zero transformation logic to get wrong.
+
+
+class RalcoConvention(Base):
+    """plpralco.dat — single reservoir's discharge-restriction curve. No Excel source (see
+    section docstring) — bootstrapped."""
+
+    __tablename__ = "ralco_convention"
+
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"), primary_key=True)
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    segments: Mapped[list[dict]] = mapped_column(JSON)  # [{volume, b, a}, ...]
+
+    plant: Mapped[Plant] = relationship()
+
+
+class ExtractionPoint(Base):
+    """plpextrac.dat — one row per extraction: a source reservoir, a max extraction rate, and the
+    downstream plant receiving it. No Excel source (see section docstring) — bootstrapped."""
+
+    __tablename__ = "extraction_point"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    source_plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    downstream_plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    max_extraction: Mapped[float] = mapped_column(Float)
+
+    source_plant: Mapped[Plant] = relationship(foreign_keys=[source_plant_id])
+    downstream_plant: Mapped[Plant] = relationship(foreign_keys=[downstream_plant_id])
+
+
+class ReservoirFiltration(Base):
+    """plpfilemb.dat — one row per reservoir with filtration losses. No Excel source (see section
+    docstring) — bootstrapped."""
+
+    __tablename__ = "reservoir_filtration"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    downstream_plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    avg_filtration: Mapped[float] = mapped_column(Float)
+    segments: Mapped[list[dict]] = mapped_column(JSON)  # [{volume, slope, constant}, ...]
+
+    plant: Mapped[Plant] = relationship(foreign_keys=[plant_id])
+    downstream_plant: Mapped[Plant] = relationship(foreign_keys=[downstream_plant_id])
+
+
+class ReservoirSpillVolume(Base):
+    """plpvrebemb.dat — one row per reservoir with a spill volume/cost. No Excel source (see
+    section docstring) — bootstrapped."""
+
+    __tablename__ = "reservoir_spill_volume"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    spill_volume: Mapped[float] = mapped_column(Float)
+    cost: Mapped[float] = mapped_column(Float)
+
+    plant: Mapped[Plant] = relationship()
+
+
+class BasinConventionLine(Base):
+    """plpmaulen.dat/plplajam.dat — see section docstring for why these are stored as an ordered,
+    verbatim line sequence rather than individually-typed fields."""
+
+    __tablename__ = "basin_convention_line"
+    __table_args__ = (UniqueConstraint("case_id", "convention", "line_order"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    convention: Mapped[str] = mapped_column(String)  # 'MAULE' | 'LAJA'
+    line_order: Mapped[int] = mapped_column(Integer)  # 0-based, original file order
+    is_comment: Mapped[bool] = mapped_column(Boolean)
+    text: Mapped[str] = mapped_column(String)

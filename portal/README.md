@@ -5,7 +5,7 @@ authors PLP model case data and generates the `.dat` files the PLP solver reads.
 `/home/erick/.claude/plans/ethereal-scribbling-tiger.md` for the full phased plan; this covers
 what's implemented so far.
 
-## Status: Phase 0 + 1 + 2 + 3 + 4 + 5 complete
+## Status: Phase 0 + 1 + 2 + 3 + 4 + 5 + 6 complete
 
 - **Phase 0** — `curves/reservoir_volume.py`: the 15 `Vol_<Name>` reservoir level→volume rating
   curves ported from `xla/FUNCCDEC_CDEC.xla`, needed by Phase 4's maintenance generators.
@@ -90,6 +90,26 @@ what's implemented so far.
   The only mismatch found: 2 plants in `plpaflce.dat` (`ALTOPOLC`, `Sum_Isla_Mina`) are classified
   `'X'` (fuera de servicio) in the current Centrales sheet and so have no active `Plant` row at
   all — same exclusion convention as `plpcnfce.dat` itself, not a new issue.
+- **Phase 6** — basin conventions & remaining static files: `ralco_convention`,
+  `extraction_point`, `reservoir_filtration`, `reservoir_spill_volume`, `basin_convention_line`;
+  generators for `plpralco.dat`, `plpextrac.dat`, `plpfilemb.dat`, `plpvrebemb.dat`,
+  `plpmaulen.dat`, `plplajam.dat`.
+
+  Four of these six files (`plpralco.dat`/`plpextrac.dat`/`plpfilemb.dat`/`plpvrebemb.dat`) have
+  **no Excel source in the current workbook at all** — confirmed by listing every sheet, hidden
+  included: none of `RestRalco`/`EXTRACCIONES`/`FILTRACIONES`/`REBVERT` (the sheets the VBA writers
+  reference) exist. Bootstrapped from the golden files, same mechanism as Phase 2's reservoir
+  curves; still modeled as proper normalized tables (referencing `Plant`) since that's a natural
+  fit for a real editing UI.
+
+  `plpmaulen.dat`/`plplajam.dat` DO have real, current sheets (`MAULEN`/`LAJAM`) — but each is
+  ~90-100 sequential fields of several different shapes (scalars, 12-month curves,
+  variable-length name lists, "manual override by year" blocks whose row count can be zero), and
+  both are rarely-edited basin operating agreements rather than per-case tunable data. A deliberate
+  scoping choice, not a workaround: `BasinConventionLine` stores each file as its exact ordered
+  sequence of physical lines (comment or data, tagged), replayed verbatim by the generator — still
+  real editable data (each line is a plain editable text field), and correct by construction, since
+  bootstrapping and regenerating is an exact round-trip with no transformation logic to get wrong.
 
 ## Setup
 

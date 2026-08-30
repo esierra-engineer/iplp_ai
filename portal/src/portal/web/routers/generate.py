@@ -26,16 +26,22 @@ from ...generators import (
     plpdeb,
     plpdem,
     plpeta,
+    plpextrac,
+    plpfilemb,
     plpidap2,
     plpidape,
     plpidsim,
+    plplajam,
     plpmanbat,
     plpmance,
     plpmanem,
     plpmanli,
     plpmat,
+    plpmaulen,
     plpminembh,
+    plpralco,
     plprun,
+    plpvrebemb,
 )
 from ..deps import get_session, templates
 
@@ -66,6 +72,12 @@ GENERATORS = {
     "plpidsim.dat": plpidsim,
     "plpidape.dat": plpidape,
     "plpidap2.dat": plpidap2,
+    "plpralco.dat": plpralco,
+    "plpextrac.dat": plpextrac,
+    "plpfilemb.dat": plpfilemb,
+    "plpvrebemb.dat": plpvrebemb,
+    "plpmaulen.dat": plpmaulen,
+    "plplajam.dat": plplajam,
 }
 
 
