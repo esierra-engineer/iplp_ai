@@ -1,37 +1,55 @@
-"""One-time importer: openpyxl (+ the current golden .dat files) -> SQLite, for a new Case.
+"""One-time importer: openpyxl (+, when available, the current golden .dat files) -> SQLite, for a
+new Case.
 
-Phase 1 scope only: buses (Barras), lines (Líneas), the stage calendar (Etapas), and the three
+`dat_static_dir`/`dat_block_dependant_dir` are optional. Passing them lets this importer bootstrap
+the handful of fields that have no Excel/VBA source at all (see below) from the case's current
+authoritative .dat output. Omitting either (or both) — the "xlsm alone" path — still imports
+everything derivable from the workbook; the fields below fall back to sensible model defaults (or,
+for tables with genuinely no Excel source, are simply left empty) instead of crashing, and each
+fallback logs a warning so it's visible rather than silently assumed correct.
+
+Phase 1 scope: buses (Barras), lines (Líneas), the stage calendar (Etapas), and the three
 solver-control files (plpmat.dat/plpdeb.dat/plprun.dat).
 
-Known bootstrap limitation (documented, not hidden): two pieces of Phase 1 data are NOT derived
-from the .xlsm because doing so requires porting VBA logic outside this phase's scope:
+Known bootstrap limitations (documented, not hidden):
 
 - Stage.hydro_dependent (FDesh) and Stage.rate_factor (FactTasa) are not plain Etapas-sheet
   columns — FactTasa in particular is a compounding per-stage discount factor. This importer reads
-  both straight from the case's existing dat/block_dependant/plpeta.dat (the current, authoritative
-  output for this case) rather than re-deriving them, since that derivation isn't ported yet.
-- Block durations (plpblo.dat) come from the same kind of load-duration-curve algorithm
-  (`Rutina05.Curva_de_Carga_Mod`, see the plan's VBA module map) that is out of scope for Phase 1.
-  This importer reads block durations straight from the case's existing dat/block_dependant/plpblo.dat.
+  both from the case's existing dat/block_dependant/plpeta.dat when given (the current,
+  authoritative output for this case) rather than re-deriving them, since that derivation isn't
+  ported yet. With no golden file, they default to hydro_dependent=False, rate_factor=1.0.
+- Block durations (plpblo.dat) ARE fully derived from the workbook: the Etapas sheet carries one
+  column per block (column 8 onward) with that block's hour count directly, keyed off "Nº Bloques"
+  (column 7) — no golden file needed for this one; see `_import_blocks`.
 - plpmat.dat/plpdeb.dat/plprun.dat aren't clearly Excel-sourced at all (no sheet reference was found
-  for them in the VBA map) — imported straight from dat/static/.
+  for them in the VBA map) — read from dat/static/ when given, else every column uses the model's
+  own default (see db/models.py's MathParams/DebugParams/RunParams).
 
-Both are legitimate for a *migration* importer (its job is exactly "seed the DB from whatever is
-currently authoritative for this case"), but a from-scratch new case created only in the web UI,
-with no pre-existing .dat files, will need those derivations ported before Phase 1's generators can
-produce correct values for it. Track that as follow-up work, not silently assumed solved.
+These are legitimate for a *migration* importer (its job is exactly "seed the DB from whatever is
+currently authoritative for this case"), and the defaults above make a from-scratch new case
+(created from only an .xlsm, with no pre-existing .dat files at all) still produce a usable case —
+those specific fields just start at neutral defaults, editable afterwards via the web UI, rather
+than something derived from a ported VBA algorithm that doesn't exist yet.
 
 Phase 2 (plant fleet) adds a similar situation, worth calling out separately since it's not a
 scoping shortcut but a genuine absence: **no VBA writer for plpcenre.dat or plpcenpmax.dat was
 found in either xla workbook** (searched both). Those two files' reservoir rating-curve data has no
-Excel source at all — bootstrapped from the golden files here, same mechanism as above. Separately,
+Excel source at all — bootstrapped from the golden files when given, otherwise left empty (no
+plausible default exists — these are per-reservoir piecewise curves, not scalars). Separately,
 plpcnfce.dat's per-embalse `EmbFEsc` (scale factor) also has no Centrales-sheet column (confirmed by
-cross-checking real values against the parsed golden file) and is bootstrapped the same way; every
-other plpcnfce.dat field below (including the header's 5 constant flags, and 9 per-plant fields
-confirmed uniform-constant across all 2964 plants in this case: cen_ipot, min_tec, inter, fcad,
-mttd_hrz, cost_arranque, cost_detencion, on_flag, p_ini) comes straight from the Centrales sheet —
-see `_import_plants`'s column-mapping comment, empirically validated against the golden file's
-actual values (not just the sheet's header labels, which are ambiguous in a couple of spots).
+cross-checking real values against the parsed golden file) and is bootstrapped the same way when a
+golden file is given, else defaults to 1.0 (a neutral scale factor); every other plpcnfce.dat field
+below (including the header's 5 constant flags, and 9 per-plant fields confirmed uniform-constant
+across all 2964 plants in this case: cen_ipot, min_tec, inter, fcad, mttd_hrz, cost_arranque,
+cost_detencion, on_flag, p_ini) comes straight from the Centrales sheet — see `_import_plants`'s
+column-mapping comment, empirically validated against the golden file's actual values (not just the
+sheet's header labels, which are ambiguous in a couple of spots).
+
+Phases 4-6's maintenance/hydrology/basin-convention tables (plpmanbat.dat, plpaflce.dat/
+plpidsim.dat/plpidape.dat/plpidap2.dat, plpralco.dat/plpextrac.dat/plpfilemb.dat/plpvrebemb.dat)
+have no Excel source at all regardless of xlsm-alone status (see each function's docstring) — they
+already guard each golden file's existence individually and simply import nothing (empty tables,
+not an error) when it's unavailable.
 """
 
 from __future__ import annotations
@@ -145,8 +163,8 @@ def import_case(
     *,
     case_name: str,
     xlsm_path: Path,
-    dat_static_dir: Path,
-    dat_block_dependant_dir: Path,
+    dat_static_dir: Path | None = None,
+    dat_block_dependant_dir: Path | None = None,
     description: str | None = None,
 ) -> Case:
     wb = openpyxl.load_workbook(xlsm_path, data_only=True, keep_vba=False)
@@ -157,7 +175,7 @@ def import_case(
 
     bus_by_num = _import_buses(session, case, wb)
     stage_by_num = _import_stages(session, case, wb, dat_block_dependant_dir)
-    _import_blocks(session, case, stage_by_num, dat_block_dependant_dir)
+    _import_blocks(session, case, wb, stage_by_num)
     _import_lines(session, case, bus_by_num, wb)
     _import_solver_params(session, case, dat_static_dir)
 
@@ -204,12 +222,23 @@ def _import_buses(session: Session, case: Case, wb) -> dict[int, Bus]:
     return bus_by_num
 
 
-def _import_stages(session: Session, case: Case, wb, dat_block_dependant_dir: Path) -> dict[int, Stage]:
+def _import_stages(
+    session: Session, case: Case, wb, dat_block_dependant_dir: Path | None
+) -> dict[int, Stage]:
     """Etapas sheet: header row 4 ('Etapa','Inicial','Nº Días','Final','Año','Mes','Nº Bloques'),
-    data from row 5. FDesh/FactTasa are bootstrapped from the golden plpeta.dat (see module docstring)."""
+    data from row 5. FDesh/FactTasa are bootstrapped from the golden plpeta.dat when available (see
+    module docstring); with no golden file they default to hydro_dependent=False, rate_factor=1.0."""
     ws = wb["Etapas"]
-    golden = parse_plpeta((dat_block_dependant_dir / "plpeta.dat").read_text(encoding="latin-1"))
-    golden_by_num = {s["num_eta"]: s for s in golden["stages"]}
+    golden_path = dat_block_dependant_dir / "plpeta.dat" if dat_block_dependant_dir else None
+    if golden_path is not None and golden_path.exists():
+        golden = parse_plpeta(golden_path.read_text(encoding="latin-1"))
+        golden_by_num = {s["num_eta"]: s for s in golden["stages"]}
+    else:
+        print(
+            "import_case: warning, no plpeta.dat golden file — Stage.hydro_dependent/rate_factor "
+            "default to False/1.0."
+        )
+        golden_by_num = {}
 
     stage_by_num: dict[int, Stage] = {}
     row = 5
@@ -240,24 +269,40 @@ def _import_stages(session: Session, case: Case, wb, dat_block_dependant_dir: Pa
     return stage_by_num
 
 
-def _import_blocks(
-    session: Session, case: Case, stage_by_num: dict[int, Stage], dat_block_dependant_dir: Path
-) -> None:
-    """plpblo.dat block durations, bootstrapped straight from the golden file (see module docstring)."""
-    golden = parse_plpblo((dat_block_dependant_dir / "plpblo.dat").read_text(encoding="latin-1"))
-    for b in golden["blocks"]:
-        stage = stage_by_num[b["num_eta"]]
-        session.add(
-            Block(
-                case_id=case.id,
-                num_blo=b["num_blo"],
-                stage_id=stage.id,
-                duration=b["duration"],
-                year=stage.year,
-                month=stage.month,
-                label=f"Bloque {b['num_blo']:02d}",
+def _import_blocks(session: Session, case: Case, wb, stage_by_num: dict[int, Stage]) -> None:
+    """plpblo.dat block durations: derived directly from the Etapas sheet itself, not bootstrapped
+    from a golden file — 'Nº Bloques' (column 7) says how many blocks a stage has, and columns 8
+    onward carry that many per-block hour counts, one column per block (confirmed against the
+    golden plpblo.dat: e.g. stage 1's 10 values in columns 8-17 match its 10 'NHoras' rows exactly).
+    num_blo is a global sequential counter across every stage, matching the golden file's own
+    strictly-ascending 1..N numbering."""
+    ws = wb["Etapas"]
+    num_blo = 0
+    row = 5
+    while True:
+        num_eta = ws.cell(row, 1).value
+        if num_eta is None:
+            break
+        num_eta = int(num_eta)
+        stage = stage_by_num[num_eta]
+        n_bloques = int(ws.cell(row, 7).value)
+        for i in range(n_bloques):
+            num_blo += 1
+            hours = ws.cell(row, 8 + i).value
+            session.add(
+                Block(
+                    case_id=case.id,
+                    num_blo=num_blo,
+                    stage_id=stage.id,
+                    duration=int(
+                        _safe_float(hours, context=f"Etapas row {row}, block {i + 1} hours", default=0.0)
+                    ),
+                    year=stage.year,
+                    month=stage.month,
+                    label=f"Bloque {num_blo:02d}",
+                )
             )
-        )
+        row += 1
     session.flush()
 
 
@@ -299,19 +344,28 @@ def _import_lines(session: Session, case: Case, bus_by_num: dict[int, Bus], wb) 
     session.flush()
 
 
-def _import_solver_params(session: Session, case: Case, dat_static_dir: Path) -> None:
+def _import_solver_params(session: Session, case: Case, dat_static_dir: Path | None) -> None:
     """plpmat.dat/plpdeb.dat/plprun.dat: no confirmed Excel source (see module docstring) —
-    bootstrapped straight from the golden static files."""
-    mat = parse_plpmat((dat_static_dir / "plpmat.dat").read_text(encoding="latin-1"))
-    deb = parse_plpdeb((dat_static_dir / "plpdeb.dat").read_text(encoding="latin-1"))
-    run = parse_plprun((dat_static_dir / "plprun.dat").read_text(encoding="latin-1"))
+    bootstrapped from the golden static files when available; otherwise each column falls back to
+    the model's own default (see db/models.py's MathParams/DebugParams/RunParams)."""
+
+    def _load(parser, filename: str, label: str) -> dict:
+        path = dat_static_dir / filename if dat_static_dir else None
+        if path is not None and path.exists():
+            return parser(path.read_text(encoding="latin-1"))
+        print(f"import_case: warning, no {filename} golden file — {label} uses model defaults.")
+        return {}
+
+    mat = _load(parse_plpmat, "plpmat.dat", "MathParams")
+    deb = _load(parse_plpdeb, "plpdeb.dat", "DebugParams")
+    run = _load(parse_plprun, "plprun.dat", "RunParams")
     session.add(MathParams(case_id=case.id, **mat))
     session.add(DebugParams(case_id=case.id, **deb))
     session.add(RunParams(case_id=case.id, **run))
 
 
 def _import_plants(
-    session: Session, case: Case, bus_by_num: dict[int, Bus], wb, dat_static_dir: Path
+    session: Session, case: Case, bus_by_num: dict[int, Bus], wb, dat_static_dir: Path | None
 ) -> dict[str, Plant]:
     """Centrales sheet: header rows 4-5, data from row 6. Column mapping below was derived from the
     sheet's own header labels, then EMPIRICALLY VALIDATED by cross-checking real values (cen_ind,
@@ -347,11 +401,16 @@ def _import_plants(
     from Excel — the scaling is purely a file-writing convention, applied only at generation time.
     """
     ws = wb["Centrales"]
-    golden_femb = {
-        p["name"]: p["f_esc"]
-        for p in parse_plpcnfce((dat_static_dir / "plpcnfce.dat").read_text(encoding="latin-1"))["plants"]
-        if p["block"] == "EMBALSE"
-    }
+    golden_femb: dict[str, float] = {}
+    cnfce_path = dat_static_dir / "plpcnfce.dat" if dat_static_dir else None
+    if cnfce_path is not None and cnfce_path.exists():
+        golden_femb = {
+            p["name"]: p["f_esc"]
+            for p in parse_plpcnfce(cnfce_path.read_text(encoding="latin-1"))["plants"]
+            if p["block"] == "EMBALSE"
+        }
+    else:
+        print("import_case: warning, no plpcnfce.dat golden file — Reservoir.f_esc defaults to 1.0.")
 
     plant_by_name: dict[str, Plant] = {}
     plant_by_cen_ind: dict[int, Plant] = {}
@@ -486,11 +545,19 @@ def _import_plants(
 
 
 def _import_reservoir_curves(
-    session: Session, case: Case, plant_by_name: dict[str, Plant], dat_static_dir: Path
+    session: Session, case: Case, plant_by_name: dict[str, Plant], dat_static_dir: Path | None
 ) -> None:
     """plpcenre.dat/plpcenpmax.dat: no confirmed Excel/VBA source at all (see module docstring) —
-    bootstrapped straight from the golden static files."""
-    cenre = parse_plpcenre((dat_static_dir / "plpcenre.dat").read_text(encoding="latin-1"))
+    bootstrapped from the golden static files when available; skipped entirely (empty tables) for
+    an xlsm-alone import, since there is no plausible default for a per-reservoir piecewise curve."""
+    if dat_static_dir is None:
+        print("import_case: warning, no dat_static_dir given — skipping plpcenre.dat/plpcenpmax.dat curves.")
+        return
+    cenre_path = dat_static_dir / "plpcenre.dat"
+    if not cenre_path.exists():
+        print("import_case: warning, no plpcenre.dat golden file — skipping reservoir yield curves.")
+        return
+    cenre = parse_plpcenre(cenre_path.read_text(encoding="latin-1"))
     for r in cenre["reservoirs"]:
         curve = ReservoirYieldCurve(
             case_id=case.id,
@@ -512,7 +579,12 @@ def _import_reservoir_curves(
                 )
             )
 
-    cenpmax = parse_plpcenpmax((dat_static_dir / "plpcenpmax.dat").read_text(encoding="latin-1"))
+    cenpmax_path = dat_static_dir / "plpcenpmax.dat"
+    if not cenpmax_path.exists():
+        print("import_case: warning, no plpcenpmax.dat golden file — skipping reservoir Pmax curves.")
+        session.flush()
+        return
+    cenpmax = parse_plpcenpmax(cenpmax_path.read_text(encoding="latin-1"))
     for r in cenpmax["reservoirs"]:
         curve = ReservoirPmaxCurve(
             case_id=case.id,
@@ -822,11 +894,14 @@ def _import_reservoir_min_volume_slack(
     session.flush()
 
 
-def _import_battery_maintenance(session: Session, case: Case, dat_block_dependant_dir: Path) -> None:
+def _import_battery_maintenance(session: Session, case: Case, dat_block_dependant_dir: Path | None) -> None:
     """plpmanbat.dat: no Excel source at all (see module docstring) — bootstrapped from the
-    golden file. Per the user's 2026-08-30 ruling (code is the rule over a mismatched sample
-    filename), this reads the checked-in `plpmantbat.dat` sample but the corresponding generator
-    writes it out as `plpmanbat.dat`, matching what genpdbaterias.f actually opens."""
+    golden file when available (else the table is simply left empty). Per the user's 2026-08-30
+    ruling (code is the rule over a mismatched sample filename), this reads the checked-in
+    `plpmantbat.dat` sample but the corresponding generator writes it out as `plpmanbat.dat`,
+    matching what genpdbaterias.f actually opens."""
+    if dat_block_dependant_dir is None:
+        return
     battery_by_name = {b.plant.name: b for b in session.scalars(select(Battery).where(Battery.case_id == case.id))}
     golden_path = dat_block_dependant_dir / "plpmantbat.dat"
     if not golden_path.exists():
@@ -855,11 +930,16 @@ def _import_hydrology(
     case: Case,
     plant_by_name: dict[str, Plant],
     stage_by_num: dict[int, Stage],
-    dat_block_dependant_dir: Path,
+    dat_block_dependant_dir: Path | None,
 ) -> None:
     """plpaflce.dat/plpidsim.dat/plpidape.dat/plpidap2.dat: no Excel derivation at all — see
     db/models.py's Phase 5 section docstring for why (VBA's own `Rnd` PRNG isn't reproducible).
-    Bootstrapped from the golden files; Inflow is bulk-inserted (~40k rows for this case)."""
+    Bootstrapped from the golden files when available; Inflow is bulk-inserted (~40k rows for this
+    case). With no dat_block_dependant_dir (xlsm-alone import), all four tables are simply left
+    empty — there is nothing in the workbook to derive hydrology data from regardless."""
+    if dat_block_dependant_dir is None:
+        print("import_case: warning, no dat_block_dependant_dir given — hydrology tables left empty.")
+        return
     aflce_path = dat_block_dependant_dir / "plpaflce.dat"
     if aflce_path.exists():
         aflce = parse_plpaflce(aflce_path.read_text(encoding="latin-1"))
@@ -921,14 +1001,17 @@ def _import_hydrology(
 
 
 def _import_basin_conventions(
-    session: Session, case: Case, plant_by_name: dict[str, Plant], dat_static_dir: Path
+    session: Session, case: Case, plant_by_name: dict[str, Plant], dat_static_dir: Path | None
 ) -> None:
     """plpralco.dat/plpextrac.dat/plpfilemb.dat/plpvrebemb.dat: no Excel source at all (see
-    db/models.py's Phase 6 section docstring) — bootstrapped from the golden files, matched to
-    Plant by name. plpmaulen.dat/plplajam.dat: real sheets exist but are stored as a verbatim
-    ordered line sequence instead (see BasinConventionLine's docstring for why)."""
+    db/models.py's Phase 6 section docstring) — bootstrapped from the golden files when available,
+    matched to Plant by name. plpmaulen.dat/plplajam.dat: real sheets exist but are stored as a
+    verbatim ordered line sequence instead (see BasinConventionLine's docstring for why). With no
+    dat_static_dir (xlsm-alone import), every table here is simply left empty."""
 
     def _read(name: str) -> str | None:
+        if dat_static_dir is None:
+            return None
         path = dat_static_dir / name
         return path.read_text(encoding="latin-1") if path.exists() else None
 

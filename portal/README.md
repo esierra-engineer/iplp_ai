@@ -43,8 +43,9 @@ what's implemented so far.
   **not** a duration-curve computation — they're literal extra columns on the Etapas sheet (one per
   block), and a stage's blocks are calendar day-slices that repeat identically every day of that
   stage, not chronological chunks of the whole stage. `Stage.start_date` was added to the schema to
-  support this (Phase 1's Block import still bootstraps from the golden `plpblo.dat`, which remains
-  correct — this only affects how Phase 3 has to walk the calendar for demand).
+  support this — and Phase 1's Block import was later fixed to derive durations directly from those
+  same Etapas-sheet columns (see "Importing from the .xlsm alone" below) instead of bootstrapping
+  from the golden `plpblo.dat`.
 - **Phase 4** — maintenance schedules: `plant_maintenance`, `line_maintenance`,
   `reservoir_maintenance`, `reservoir_min_volume_slack`, `battery_maintenance`; generators for
   `plpmance.dat` (2,783 plants, ~610k data rows — the largest golden file in the project at 36.7MB),
@@ -149,6 +150,20 @@ uv run python -m portal import-xlsm \
   --dat-block-dependant ../dat/block_dependant
 ```
 
+`--dat-static`/`--dat-block-dependant` are optional — omit either (or both) to import from the
+`.xlsm` alone:
+
+```
+uv run python -m portal import-xlsm --name "new_case" --xlsm /path/to/new_case.xlsm
+```
+
+The handful of fields with no derivable Excel source (see "Known bootstrap limitations" below) then
+fall back to sensible model defaults, or are left empty for tables with no plausible default (a
+per-reservoir rating curve, hydrology data) — each fallback prints a warning so it's visible, not
+silently assumed correct. Everything else — including all 234 block durations, now derived directly
+from the Etapas sheet's own per-block hour-count columns rather than a golden file — imports fully
+either way.
+
 Writes to `portal.sqlite3` at the project root (override with `PORTAL_DB_PATH`).
 
 ## Run the web app
@@ -176,26 +191,48 @@ each for the `plpdem.dat` and `indhor.csv` tests). `web/routers/generate.py`'s "
 action shares one `compute()` call between both files instead of paying for it twice; the plain
 per-file preview/test path doesn't, since each test should be able to run standalone.
 
+## Recovering broken Excel formulas at import time
+
+Real, currently-in-use workbooks were found to contain cached Excel formula-error strings
+(`#NAME?`, `#REF!`, etc.) — typically because `FUNCCDEC_CDEC.xla` wasn't loaded at the last recalc,
+so `=Vol_<Name>(cota)`/`=Rend_<Name>(cota)` cells (Centrales sheet's Volumen/Rendimiento columns)
+cached an error instead of a number. `_safe_float()` tolerates any such cell everywhere in the
+importer (logs a warning, falls back to `0.0`), but for these two specific columns the importer
+does better than that default: `vol_or_from_cota()`/`rendimiento_or_from_cota()` recover the real
+value from the paired (non-formula) Cota column using the exact same ported `Vol_<Name>`/
+`Rend_<Name>` curves (`curves/reservoir_volume.py`/`reservoir_yield.py`) the broken formula itself
+would have called — not every reservoir has a ported `Rend_<Name>` (e.g. `LMAULE` genuinely has
+none in the source workbook), so that one case still falls back to `_safe_float`'s `0.0`.
+
 ## Known bootstrap limitations (tracked, not hidden)
 
-A number of fields/tables are seeded straight from the case's *existing* golden `.dat` files rather
-than derived from the `.xlsm` — see each `db/migrate_from_xlsm.py` import function's docstring for
-the specific reason in each case. They fall into two different situations, worth telling apart:
+A number of fields/tables are seeded from the case's *existing* golden `.dat` files, when given,
+rather than derived from the `.xlsm` — see each `db/migrate_from_xlsm.py` import function's
+docstring for the specific reason in each case. `--dat-static`/`--dat-block-dependant` are optional
+(see "Import a case" above); with either omitted, these all fall back gracefully instead of
+crashing — the fallback differs by situation:
 
-1. **Genuinely out of scope so far**: `Stage.hydro_dependent`/`Stage.rate_factor` and all `Block`
-   durations (deriving these needs VBA logic not ported in this project) — a from-scratch case with
-   no pre-existing `.dat` files will need that derivation ported before these two are correct for
-   it.
+1. **Genuinely out of scope so far**: `Stage.hydro_dependent`/`Stage.rate_factor` (deriving these
+   needs VBA logic not ported in this project — `FactTasa` is a compounding per-stage discount
+   factor) default to `False`/`1.0` with no golden `plpeta.dat`. `Block` durations are **no longer**
+   in this category — they're now derived directly from the Etapas sheet's own per-block hour-count
+   columns (confirmed to match the golden `plpblo.dat` exactly, all 234 blocks), so no golden file
+   is needed for them at all, xlsm-alone or not.
 2. **No Excel/VBA source exists at all**, confirmed by direct inspection (not assumed): the three
-   solver-control files, `Reservoir.f_esc`, all of `plpcenre.dat`/`plpcenpmax.dat`
-   (Phase 2); all of Phase 5's hydrology tables (`plpaflce.dat`/`plpidsim.dat`/`plpidape.dat`/
-   `plpidap2.dat` — VBA's own `Rnd` PRNG isn't reproducible, so there was never an algorithm to
-   port, not just one left undone); `BatteryMaintenance` (Phase 4); `RalcoConvention`/
+   solver-control files (each column defaults to the model's own default with no golden file —
+   `db/models.py`'s `MathParams`/`DebugParams`/`RunParams` already have sensible per-column
+   defaults), `Reservoir.f_esc` (defaults to `1.0`), all of `plpcenre.dat`/`plpcenpmax.dat`
+   (Phase 2 — left empty, no plausible default for a per-reservoir piecewise curve); all of Phase
+   5's hydrology tables (`plpaflce.dat`/`plpidsim.dat`/`plpidape.dat`/`plpidap2.dat` — VBA's own
+   `Rnd` PRNG isn't reproducible, so there was never an algorithm to port, not just one left
+   undone — left empty); `BatteryMaintenance` (Phase 4, left empty); `RalcoConvention`/
    `ExtractionPoint`/`ReservoirFiltration`/`ReservoirSpillVolume` (Phase 6 — the sheets the VBA
-   writers reference don't exist anywhere in the current workbook, hidden sheets included). For
-   these, "porting the derivation" doesn't mean anything — bootstrapping *is* the mechanism, since
-   there's nowhere else this data could come from. A from-scratch case needs this data supplied
-   directly (by hand, or from wherever it's actually maintained outside this workbook).
+   writers reference don't exist anywhere in the current workbook, hidden sheets included — left
+   empty). For these, "porting the derivation" doesn't mean anything — bootstrapping *is* the
+   mechanism, since there's nowhere else this data could come from. A from-scratch, xlsm-alone case
+   gets a usable case regardless (these fields/tables just start at a neutral default or empty,
+   editable afterwards via the web UI), but genuinely needs this data supplied by hand (or from
+   wherever it's actually maintained outside this workbook) before it's fully accurate.
 
 `plpmaulen.dat`/`plplajam.dat` are a third, distinct case: real current sheets (`MAULEN`/`LAJAM`)
 exist, but are stored as a verbatim line sequence rather than parsed field-by-field — a deliberate

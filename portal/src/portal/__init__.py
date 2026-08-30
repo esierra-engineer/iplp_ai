@@ -18,9 +18,21 @@ def main() -> None:
     imp = sub.add_parser("import-xlsm", help="Seed the database with a new case from an .xlsm")
     imp.add_argument("--name", required=True, help="Case name (must be unique)")
     imp.add_argument("--xlsm", required=True, type=Path, help="Path to the case's .xlsm")
-    imp.add_argument("--dat-static", required=True, type=Path, help="Path to that case's dat/static/")
     imp.add_argument(
-        "--dat-block-dependant", required=True, type=Path, help="Path to dat/block_dependant/"
+        "--dat-static",
+        required=False,
+        default=None,
+        type=Path,
+        help="Path to that case's dat/static/ (optional — omit to import from the .xlsm alone; "
+        "the handful of fields with no Excel source are then left at sensible defaults/empty, "
+        "see migrate_from_xlsm.py's module docstring)",
+    )
+    imp.add_argument(
+        "--dat-block-dependant",
+        required=False,
+        default=None,
+        type=Path,
+        help="Path to dat/block_dependant/ (optional — same xlsm-alone fallback as --dat-static)",
     )
     imp.add_argument("--description", default=None)
 
