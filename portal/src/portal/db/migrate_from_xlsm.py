@@ -117,6 +117,26 @@ _CENTRALES_TYPE_MAP = {
     "F": "FALLA",
 }
 
+_EXCEL_ERROR_STRINGS = {"#NAME?", "#REF!", "#VALUE!", "#DIV/0!", "#N/A", "#NULL!", "#NUM!"}
+
+
+def _safe_float(value, *, context: str, default: float = 0.0) -> float:
+    """Convert a cell value to float, tolerating live Excel formula errors (a broken/unresolved
+    reference cached as e.g. '#NAME?') rather than crashing the whole import on one bad cell —
+    confirmed to happen in real, currently-in-use workbooks, not a hypothetical. Logs a warning
+    (not silent) and falls back to `default` so the rest of the case still imports; the affected
+    field can be corrected by hand afterwards via the web UI."""
+    if value is None:
+        return default
+    if isinstance(value, str) and value.strip().upper() in _EXCEL_ERROR_STRINGS:
+        print(f"import_case: warning, {context} is an Excel error ({value!r}) — using {default}.")
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        print(f"import_case: warning, {context} is not numeric ({value!r}) — using {default}.")
+        return default
+
 
 def import_case(
     session: Session,
@@ -262,11 +282,11 @@ def _import_lines(session: Session, case: Case, bus_by_num: dict[int, Bus], wb) 
                 name=str(name),
                 bus_from_id=bus_a.id,
                 bus_to_id=bus_b.id,
-                capacity_ab=float(ws.cell(row, 5).value),
-                capacity_ba=float(ws.cell(row, 6).value),
-                voltage_kv=float(ws.cell(row, 7).value),
-                resistance=float(ws.cell(row, 10).value),
-                reactance=float(ws.cell(row, 11).value),
+                capacity_ab=_safe_float(ws.cell(row, 5).value, context=f"Líneas!{name}, capacity_ab"),
+                capacity_ba=_safe_float(ws.cell(row, 6).value, context=f"Líneas!{name}, capacity_ba"),
+                voltage_kv=_safe_float(ws.cell(row, 7).value, context=f"Líneas!{name}, voltage_kv"),
+                resistance=_safe_float(ws.cell(row, 10).value, context=f"Líneas!{name}, resistance"),
+                reactance=_safe_float(ws.cell(row, 11).value, context=f"Líneas!{name}, reactance"),
                 models_losses=bool(ws.cell(row, 12).value),
                 num_segments=int(ws.cell(row, 13).value),
                 operational=bool(ws.cell(row, 14).value),
@@ -348,15 +368,15 @@ def _import_plants(
 
         bus_num = ws.cell(row, 6).value
         bus = bus_by_num.get(int(bus_num)) if bus_num else None
+        plant_name = str(ws.cell(row, 2).value)
 
         def f(col: int) -> float:
-            v = ws.cell(row, col).value
-            return float(v) if v is not None else 0.0
+            return _safe_float(ws.cell(row, col).value, context=f"Centrales!{plant_name}, col {col}")
 
         plant = Plant(
             case_id=case.id,
             cen_ind=int(cen_ind),
-            name=str(ws.cell(row, 2).value),
+            name=plant_name,
             plant_type=plant_type,
             bus_id=bus.id if bus else None,
             cos_var=f(4),
@@ -486,9 +506,9 @@ def _import_batteries(
             plant_id=plant.id,
             bat_ind=int(bat_ind),
             bus_id=bus_by_num[int(ws.cell(row, 3).value)].id,
-            discharge_loss_factor=float(ws.cell(row, 4).value),
-            capacity_min=float(ws.cell(row, 5).value),
-            capacity_max=float(ws.cell(row, 6).value),
+            discharge_loss_factor=_safe_float(ws.cell(row, 4).value, context=f"Baterias!{name}, discharge_loss_factor"),
+            capacity_min=_safe_float(ws.cell(row, 5).value, context=f"Baterias!{name}, capacity_min"),
+            capacity_max=_safe_float(ws.cell(row, 6).value, context=f"Baterias!{name}, capacity_max"),
         )
         session.add(battery)
         session.flush()
@@ -498,7 +518,7 @@ def _import_batteries(
                 BatteryInjector(
                     battery_id=battery.id,
                     name=str(injector_name),
-                    loss_factor=float(ws.cell(row, 11).value),
+                    loss_factor=_safe_float(ws.cell(row, 11).value, context=f"Baterias!{name}, loss_factor"),
                 )
             )
         row += 1
@@ -526,6 +546,15 @@ def _import_demand_profiles(
                         for day_type in range(1, 5):
                             col = 4 * month - 2 + day_type
                             mw = ws.cell(row, col).value
+                            # Fast path avoids building a context string on every one of ~480k
+                            # cells; _safe_float (with a real error message) only runs when the
+                            # cheap type check below doesn't already prove it's a plain number.
+                            if isinstance(mw, (int, float)):
+                                mw_value = float(mw)
+                            else:
+                                mw_value = _safe_float(
+                                    mw, context=f"{sheet_name}!{bus.name}, month {month} day-type {day_type} hour {hour}"
+                                )
                             rows.append(
                                 {
                                     "case_id": case.id,
@@ -534,7 +563,7 @@ def _import_demand_profiles(
                                     "month": month,
                                     "day_type": day_type,
                                     "hour": hour,
-                                    "mw": float(mw) if mw is not None else 0.0,
+                                    "mw": mw_value,
                                 }
                             )
             bar_row += 24
@@ -557,9 +586,9 @@ def _import_consumption_and_holidays(session: Session, case: Case, wb) -> None:
                 week_num=week_num,
                 start_date=ws.cell(row, 4).value.date(),
                 num_days=int(ws.cell(row, 6).value),
-                gwh_r=float(ws.cell(row, 7).value),
-                gwh_l=float(ws.cell(row, 8).value),
-                gwh_ld=float(ws.cell(row, 9).value),
+                gwh_r=_safe_float(ws.cell(row, 7).value, context=f"Consumo week {week_num}, gwh_r"),
+                gwh_l=_safe_float(ws.cell(row, 8).value, context=f"Consumo week {week_num}, gwh_l"),
+                gwh_ld=_safe_float(ws.cell(row, 9).value, context=f"Consumo week {week_num}, gwh_ld"),
             )
         )
         row += 1
@@ -586,7 +615,7 @@ def _import_industrial_projects(
                     bus_id=bus.id,
                     start_date=ws.cell(row, 1).value.date(),
                     end_date=ws.cell(row, 2).value.date(),
-                    demand_mw=float(ws.cell(row, 4).value or 0.0),
+                    demand_mw=_safe_float(ws.cell(row, 4).value, context=f"Proyectos row {row}, demand_mw"),
                     description=ws.cell(row, 5).value,
                 )
             )
@@ -617,7 +646,7 @@ def _import_thermal_cost_schedule(
                 plant_id=plant.id,
                 stage_start=int(ws.cell(row, 8).value),
                 stage_end=int(ws.cell(row, 9).value),
-                cost_var=float(ws.cell(row, 10).value),
+                cost_var=_safe_float(ws.cell(row, 10).value, context=f"CV_MP!{central}, cost_var"),
             )
         )
     session.flush()
@@ -683,8 +712,8 @@ def _import_line_maintenance(session: Session, case: Case, wb) -> None:
                     line_id=line.id,
                     block_start=int(ws.cell(row, 10).value),
                     block_end=int(ws.cell(row, 11).value),
-                    capacity_ab=float(ws.cell(row, 12).value),
-                    capacity_ba=float(ws.cell(row, 13).value),
+                    capacity_ab=_safe_float(ws.cell(row, 12).value, context=f"MantLIN!{name}, capacity_ab"),
+                    capacity_ba=_safe_float(ws.cell(row, 13).value, context=f"MantLIN!{name}, capacity_ba"),
                     operational=str(ws.cell(row, 14).value).upper() in ("TRUE", "VERDADERO"),
                 )
             )
@@ -708,8 +737,8 @@ def _import_reservoir_maintenance(
                     plant_id=plant.id,
                     stage_start=int(ws.cell(row, 9).value),
                     stage_end=int(ws.cell(row, 10).value),
-                    vol_min=float(ws.cell(row, 11).value),
-                    vol_max=float(ws.cell(row, 12).value),
+                    vol_min=_safe_float(ws.cell(row, 11).value, context=f"MantEMB!{plant.name}, vol_min"),
+                    vol_max=_safe_float(ws.cell(row, 12).value, context=f"MantEMB!{plant.name}, vol_max"),
                 )
             )
         row += 1
@@ -738,8 +767,8 @@ def _import_reservoir_min_volume_slack(
                         plant_id=plant.id,
                         stage_start=stage_range[0],
                         stage_end=stage_range[1],
-                        level_min=float(ws.cell(row, 5).value),
-                        cost=float(ws.cell(row, 6).value),
+                        level_min=_safe_float(ws.cell(row, 5).value, context=f"MantEMBh!{plant.name}, level_min"),
+                        cost=_safe_float(ws.cell(row, 6).value, context=f"MantEMBh!{plant.name}, cost"),
                     )
                 )
         row += 1
