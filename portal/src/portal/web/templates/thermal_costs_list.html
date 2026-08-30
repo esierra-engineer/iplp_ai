@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Thermal Costs — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Thermal Cost Schedule</h1>
+<p class="muted">Each row is a stage-range sharing one variable cost (US$/MWh) — expanded into one plpcosce.dat row per stage at generation time.</p>
+<form method="get" action="/cases/{{ case.id }}/thermal-costs" class="card">
+  <input type="text" name="q" placeholder="Search plant name" value="{{ q }}">
+  <button type="submit">Filter</button>
+  <span class="muted">{{ total }} rows &middot; page {{ page }} / {{ num_pages }}</span>
+</form>
+<table>
+  <thead><tr><th>Plant</th><th>Stage start</th><th>Stage end</th><th>Cost (US$/MWh)</th><th></th></tr></thead>
+  <tbody>
+    {% for s in schedules %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/thermal-costs/{{ s.id }}/update">
+        <td>{{ s.plant.name }}</td>
+        <td>{{ s.stage_start }}</td>
+        <td>{{ s.stage_end }}</td>
+        <td><input type="number" step="any" name="cost_var" value="{{ s.cost_var }}" style="width:7em"></td>
+        <td><button type="submit">Save</button></td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="card">
+  {% if page > 1 %}<a class="btn" href="?q={{ q }}&page={{ page-1 }}">&laquo; Prev</a>{% endif %}
+  {% if page < num_pages %}<a class="btn" href="?q={{ q }}&page={{ page+1 }}">Next &raquo;</a>{% endif %}
+</div>
+{% endblock %}

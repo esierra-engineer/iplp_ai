@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Industrial Projects — {{ case.name }}{% endblock %}
+{% block content %}
+<h1>Industrial Projects</h1>
+<p class="muted">Fixed MW demand additions at a bus over a date range (Proyectos sheet).</p>
+<table>
+  <thead><tr><th>Bus</th><th>Start</th><th>End</th><th>Demand (MW)</th><th>Description</th><th colspan="2"></th></tr></thead>
+  <tbody>
+    {% for p in projects %}
+    <tr>
+      <form method="post" action="/cases/{{ case.id }}/projects/{{ p.id }}/update">
+        <td>
+          <select name="bus_id">
+            {% for b in buses %}<option value="{{ b.id }}" {% if b.id==p.bus_id %}selected{% endif %}>{{ b.name }}</option>{% endfor %}
+          </select>
+        </td>
+        <td><input type="date" name="start_date" value="{{ p.start_date }}"></td>
+        <td><input type="date" name="end_date" value="{{ p.end_date }}"></td>
+        <td><input type="number" step="any" name="demand_mw" value="{{ p.demand_mw }}" style="width:6em"></td>
+        <td><input type="text" name="description" value="{{ p.description or '' }}" style="width:14em"></td>
+        <td><button type="submit">Save</button></td>
+        <td>
+          <button type="submit" class="danger" formaction="/cases/{{ case.id }}/projects/{{ p.id }}/delete"
+                  onclick="return confirm('Delete this project?');">Delete</button>
+        </td>
+      </form>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="card">
+  <h3>Add project</h3>
+  <form method="post" action="/cases/{{ case.id }}/projects">
+    <select name="bus_id" required>{% for b in buses %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}</select>
+    <input type="date" name="start_date" required>
+    <input type="date" name="end_date" required>
+    <input type="number" step="any" name="demand_mw" placeholder="MW" required style="width:6em">
+    <input type="text" name="description" placeholder="Description" style="width:14em">
+    <button type="submit">Add</button>
+  </form>
+</div>
+{% endblock %}

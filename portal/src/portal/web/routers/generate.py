@@ -10,8 +10,10 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+from ... import demand_calc
 from ...db.models import Case
 from ...generators import (
+    indhor,
     plpbar,
     plpblo,
     plpcenbat,
@@ -19,7 +21,9 @@ from ...generators import (
     plpcenre,
     plpcnfce,
     plpcnfli,
+    plpcosce,
     plpdeb,
+    plpdem,
     plpeta,
     plpmat,
     plprun,
@@ -41,11 +45,24 @@ GENERATORS = {
     "plpcenre.dat": plpcenre,
     "plpcenpmax.dat": plpcenpmax,
     "plpcenbat.dat": plpcenbat,
+    "plpdem.dat": plpdem,
+    "indhor.csv": indhor,
+    "plpcosce.dat": plpcosce,
 }
 
 
 def _generate_all(session: Session, case_id: int) -> dict[str, str]:
-    return {filename: mod.generate(session, case_id) for filename, mod in GENERATORS.items()}
+    # plpdem.dat and indhor.csv both need demand_calc.compute(), which is the slow part of this
+    # whole pipeline (~10s for this case) — compute it once and hand it to both rather than
+    # letting each generator redo it independently.
+    shared_demand = demand_calc.compute(session, case_id)
+    files = {}
+    for filename, mod in GENERATORS.items():
+        if mod in (plpdem, indhor):
+            files[filename] = mod.generate(session, case_id, shared_demand)
+        else:
+            files[filename] = mod.generate(session, case_id)
+    return files
 
 
 @router.get("")

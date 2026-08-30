@@ -272,6 +272,71 @@ def parse_plpdeb(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
+# Phase 3 file parsers
+# ---------------------------------------------------------------------------------------------
+
+
+def parse_plpdem(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_bar = parse_int(r.next_tokens()[0])
+    buses = []
+    for _ in range(n_bar):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_blo_dem = parse_int(r.next_tokens()[0])
+        data = []
+        if n_blo_dem > 0:
+            r.skip(1)
+            for _ in range(n_blo_dem):
+                mes, num_blo, demanda = r.next_tokens()
+                data.append(
+                    {"mes": parse_int(mes), "num_blo": parse_int(num_blo), "demanda": parse_float(demanda)}
+                )
+        buses.append({"name": name, "n_blo_dem": n_blo_dem, "data": data})
+    return {"n_bar": n_bar, "buses": buses}
+
+
+def parse_plpcosce(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_cen = parse_int(r.next_tokens()[0])
+    plants = []
+    for _ in range(n_cen):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_eta = parse_int(r.next_tokens()[0])
+        r.skip(1)
+        data = []
+        for _ in range(n_eta):
+            mes, num_eta, cos_var = r.next_tokens()
+            data.append(
+                {"mes": parse_int(mes), "num_eta": parse_int(num_eta), "cos_var": parse_float(cos_var)}
+            )
+        plants.append({"name": name, "n_eta": n_eta, "data": data})
+    return {"n_cen": n_cen, "plants": plants}
+
+
+def parse_indhor_csv(text: str) -> list[dict]:
+    lines = text.strip().splitlines()
+    rows = []
+    for line in lines[1:]:  # skip "Año,Mes,Dia,Hora,Bloque" header
+        year, month, day, hour, num_blo = line.split(",")
+        rows.append(
+            {
+                "year": int(year),
+                "month": int(month),
+                "day": int(day),
+                "hour": int(hour),
+                "num_blo": int(num_blo),
+            }
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------------------------
 # Phase 2 file parsers
 # ---------------------------------------------------------------------------------------------
 

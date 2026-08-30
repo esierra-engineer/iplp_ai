@@ -5,7 +5,7 @@ authors PLP model case data and generates the `.dat` files the PLP solver reads.
 `/home/erick/.claude/plans/ethereal-scribbling-tiger.md` for the full phased plan; this covers
 what's implemented so far.
 
-## Status: Phase 0 + 1 + 2 complete
+## Status: Phase 0 + 1 + 2 + 3 complete
 
 - **Phase 0** — `curves/reservoir_volume.py`: the 15 `Vol_<Name>` reservoir level→volume rating
   curves ported from `xla/FUNCCDEC_CDEC.xla`, needed by Phase 4's maintenance generators.
@@ -24,6 +24,27 @@ what's implemented so far.
   workbook (searched both); their reservoir rating-curve data is bootstrapped straight from the
   golden files, same mechanism as Phase 1's undetermined fields. Same for `plpcnfce.dat`'s
   per-embalse `EmbFEsc` scale factor.
+- **Phase 3** — demand & thermal costs: `demand_profile` (~480k rows: the Demanda-R/L/LD sheets'
+  normalized hourly load shapes), `consumption_week`/`holiday` (Consumo sheet), `industrial_project`
+  (Proyectos sheet), `thermal_cost_schedule` (CV_MP sheet); `demand_calc.py` — a full Python port
+  of `Rutina04.DEMxBarra2` (per-bus demand disaggregation: normalized shape × weekly system-wide
+  GWh target, plus industrial project overlay) and the block-aggregation loop in
+  `Archivo_03_PLPDEM_5A` — feeding generators for `plpdem.dat`, `indhor.csv`, and `plpcosce.dat`.
+  Industrial Projects and Thermal Cost Schedule web UI pages.
+
+  This was a genuine algorithm port, not a bootstrap — and it reproduces the golden `plpdem.dat`
+  and `plpcosce.dat` **exactly** (0.0 max difference across all 32,526 (bus, block) demand values
+  in this case). Tracing it also surfaced that Archivo_03's non-"_5A"-suffixed module is dead code
+  for this workbook (it references a `Demanda-I` sheet that doesn't exist) — the "_5A"-suffixed
+  module is actually the one active module for every run mode, `CDECSimTyp` gating its internal
+  behavior rather than the module choice itself gating on file/macro name as the suffix suggests.
+
+  One correctness-affecting discovery while tracing this: block hour-counts for "mensual" mode are
+  **not** a duration-curve computation — they're literal extra columns on the Etapas sheet (one per
+  block), and a stage's blocks are calendar day-slices that repeat identically every day of that
+  stage, not chronological chunks of the whole stage. `Stage.start_date` was added to the schema to
+  support this (Phase 1's Block import still bootstraps from the golden `plpblo.dat`, which remains
+  correct — this only affects how Phase 3 has to walk the calendar for demand).
 
 ## Setup
 
@@ -62,6 +83,11 @@ files for fields not yet derivable from Excel — see below), regenerates the fi
 against the corresponding golden file in `tests/golden/` using the permissive record-structure
 parsers in `tests/parsers.py` (field-value equality, not byte-for-byte diff — matching how the
 Fortran solver itself reads these files: list-directed, comment lines ignored by position only).
+
+The suite takes roughly a minute, mostly `demand_calc.compute()` (~10s per call, run twice — once
+each for the `plpdem.dat` and `indhor.csv` tests). `web/routers/generate.py`'s "generate all" web
+action shares one `compute()` call between both files instead of paying for it twice; the plain
+per-file preview/test path doesn't, since each test should be able to run standalone.
 
 ## Known bootstrap limitations (tracked, not hidden)
 

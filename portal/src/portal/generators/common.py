@@ -65,6 +65,14 @@ def logical(value: bool) -> str:
     return "T" if value else "F"
 
 
+def fiscal_month(calendar_month: int) -> int:
+    """April-start fiscal month index (1=April..12=March), no year component. Several
+    block-dependent files (plpdem.dat, plpcosce.dat, ...) carry a 'Mes' column in this convention
+    — see db/models.py's Stage docstring for the full fiscal-calendar derivation (that one also
+    needs a fiscal *year*; this file's callers only need the month, which needs no baseline)."""
+    return calendar_month - 3 if calendar_month >= 4 else calendar_month + 9
+
+
 def number(value: float, decimals: int = 6) -> str:
     """Fixed-decimal float formatting, rounding half-away-from-zero (like Excel/VBA's own
     formatting) rather than Python's f-string default of round-half-to-even on the binary float —

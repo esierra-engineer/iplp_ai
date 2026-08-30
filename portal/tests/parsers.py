@@ -17,9 +17,12 @@ from portal.dat_readers import (  # noqa: F401
     parse_plpcenpmax,
     parse_plpcenre,
     parse_plpcnfli,
+    parse_plpcosce,
     parse_plpdeb,
+    parse_plpdem,
     parse_plpeta,
     parse_plpmat,
     parse_plprun,
+    parse_indhor_csv,
     tokenize,
 )

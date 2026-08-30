@@ -39,6 +39,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import openpyxl
+from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from ..dat_readers import (
@@ -57,7 +58,11 @@ from .models import (
     BatteryInjector,
     Bus,
     Case,
+    ConsumptionWeek,
     DebugParams,
+    DemandProfile,
+    Holiday,
+    IndustrialProject,
     Line,
     LineConfig,
     MathParams,
@@ -70,6 +75,7 @@ from .models import (
     RunParams,
     Stage,
     Block,
+    ThermalCostSchedule,
 )
 
 # Centrales sheet "Tipo de Central" single-letter code -> Plant.plant_type. 'E'/'A' and 'S'/'R' each
@@ -111,6 +117,12 @@ def import_case(
     plant_by_name = _import_plants(session, case, bus_by_num, wb, dat_static_dir)
     _import_reservoir_curves(session, case, plant_by_name, dat_static_dir)
     _import_batteries(session, case, bus_by_num, plant_by_name, wb)
+
+    bus_by_upper_name = {b.name.upper(): b for b in bus_by_num.values()}
+    _import_demand_profiles(session, case, bus_by_upper_name, wb)
+    _import_consumption_and_holidays(session, case, wb)
+    _import_industrial_projects(session, case, bus_by_upper_name, wb)
+    _import_thermal_cost_schedule(session, case, plant_by_name, wb)
 
     return case
 
@@ -160,6 +172,7 @@ def _import_stages(session: Session, case: Case, wb, dat_block_dependant_dir: Pa
             duration=int(n_dias) * 24,
             rate_factor=g.get("rate_factor", 1.0),
             label=f"{int(n_bloques)} Bloques",
+            start_date=inicial.date(),
         )
         session.add(stage)
         stage_by_num[num_eta] = stage
@@ -452,4 +465,122 @@ def _import_batteries(
                 )
             )
         row += 1
+    session.flush()
+
+
+def _import_demand_profiles(
+    session: Session, case: Case, bus_by_upper_name: dict[str, Bus], wb
+) -> None:
+    """Demanda-R/L/LD sheets: header rows 4-6, data from row 7, 24 rows per bus (one per hour),
+    139 buses in this case. Columns 3-50 are (month, day-type) pairs: column = 4*month - 2 +
+    day_type, day_type 1=Domingo/2=Lunes/3=Sabado/4=Trabajo — matches Rutina04.DEMxBarra2's own
+    `ICol = 4 * imes - 2 + IDia` exactly. Bulk-inserted (Core `insert()`, not one ORM object per
+    row) since this is ~480k rows for this case."""
+    rows: list[dict] = []
+    for category, sheet_name in (("R", "Demanda-R"), ("L", "Demanda-L"), ("LD", "Demanda-LD")):
+        ws = wb[sheet_name]
+        bar_row = 7
+        while ws.cell(bar_row, 1).value is not None:
+            bus = bus_by_upper_name.get(str(ws.cell(bar_row, 1).value).upper())
+            if bus is not None:
+                for hour in range(1, 25):
+                    row = bar_row + hour - 1
+                    for month in range(1, 13):
+                        for day_type in range(1, 5):
+                            col = 4 * month - 2 + day_type
+                            mw = ws.cell(row, col).value
+                            rows.append(
+                                {
+                                    "case_id": case.id,
+                                    "bus_id": bus.id,
+                                    "category": category,
+                                    "month": month,
+                                    "day_type": day_type,
+                                    "hour": hour,
+                                    "mw": float(mw) if mw is not None else 0.0,
+                                }
+                            )
+            bar_row += 24
+    session.execute(insert(DemandProfile), rows)
+    session.flush()
+
+
+def _import_consumption_and_holidays(session: Session, case: Case, wb) -> None:
+    """Consumo sheet: week table from row 5 (Año/Mes/Semana/Inicial/Final/Nº días/GWh-R/GWh-L/
+    GWh-LD), holiday list in column K ('Festivos') from row 5 — a plain date list, independent
+    length from the week table."""
+    ws = wb["Consumo"]
+    row = 5
+    week_num = 0
+    while ws.cell(row, 4).value is not None:
+        week_num += 1
+        session.add(
+            ConsumptionWeek(
+                case_id=case.id,
+                week_num=week_num,
+                start_date=ws.cell(row, 4).value.date(),
+                num_days=int(ws.cell(row, 6).value),
+                gwh_r=float(ws.cell(row, 7).value),
+                gwh_l=float(ws.cell(row, 8).value),
+                gwh_ld=float(ws.cell(row, 9).value),
+            )
+        )
+        row += 1
+    row = 5
+    while ws.cell(row, 11).value is not None:
+        session.add(Holiday(case_id=case.id, date=ws.cell(row, 11).value.date()))
+        row += 1
+    session.flush()
+
+
+def _import_industrial_projects(
+    session: Session, case: Case, bus_by_upper_name: dict[str, Bus], wb
+) -> None:
+    """Proyectos sheet: header row 5 (Fecha Inicial/Fecha Final/BARRA/Demanda/DESCRIPCIÓN), data
+    from row 6."""
+    ws = wb["Proyectos"]
+    row = 6
+    while ws.cell(row, 1).value is not None:
+        bus = bus_by_upper_name.get(str(ws.cell(row, 3).value or "").upper())
+        if bus is not None:
+            session.add(
+                IndustrialProject(
+                    case_id=case.id,
+                    bus_id=bus.id,
+                    start_date=ws.cell(row, 1).value.date(),
+                    end_date=ws.cell(row, 2).value.date(),
+                    demand_mw=float(ws.cell(row, 4).value or 0.0),
+                    description=ws.cell(row, 5).value,
+                )
+            )
+        row += 1
+    session.flush()
+
+
+def _import_thermal_cost_schedule(
+    session: Session, case: Case, plant_by_name: dict[str, Plant], wb
+) -> None:
+    """CV_MP sheet, columns G-J (CENTRAL/INICIAL/FINAL/[US$/MWh]) from row 6 — see
+    ThermalCostSchedule's docstring for why this table (not the sheet's other, unrelated NAME/
+    DATE1/DATE2/CV table in columns B-E) is plpcosce.dat's source. Iterates to the sheet's actual
+    max_row since this table's row count doesn't match the B-E table's (confirmed: 13,331 vs
+    15,449 populated rows) — they are genuinely different lengths, not misaligned copies of the
+    same data."""
+    ws = wb["CV_MP"]
+    for row in range(6, ws.max_row + 1):
+        central = ws.cell(row, 7).value
+        if central is None:
+            continue
+        plant = plant_by_name.get(str(central))
+        if plant is None:
+            continue
+        session.add(
+            ThermalCostSchedule(
+                case_id=case.id,
+                plant_id=plant.id,
+                stage_start=int(ws.cell(row, 8).value),
+                stage_end=int(ws.cell(row, 9).value),
+                cost_var=float(ws.cell(row, 10).value),
+            )
+        )
     session.flush()

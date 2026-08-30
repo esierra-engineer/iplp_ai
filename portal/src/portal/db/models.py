@@ -12,7 +12,9 @@ hydrology, and basin-convention tables here following the same pattern.
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, UniqueConstraint
+from datetime import date as _date
+
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -50,6 +52,8 @@ class Stage(Base):
     duration: Mapped[int] = mapped_column(Integer)  # NHoras — INTEGER, not float (see spec)
     rate_factor: Mapped[float] = mapped_column(Float, default=1.0)  # FactTasa
     label: Mapped[str] = mapped_column(String, default="")  # TipoEtapa, e.g. '10 Bloques'
+    start_date: Mapped[_date] = mapped_column(Date)  # Etapas!Inicial — needed for Phase 3's
+    # day-by-day demand walk (num_dias = duration // 24, so no separate column for that).
 
     # NOTE on plpeta.dat's "Ano"/"Mes" columns: these are NOT the calendar year/month above. The
     # solver uses an April-start fiscal calendar (confirmed by cross-referencing the VBA maintenance
@@ -392,3 +396,103 @@ class BatteryInjector(Base):
     loss_factor: Mapped[float] = mapped_column(Float)  # FPC, "Rendimiento de Carga"
 
     battery: Mapped[Battery] = relationship(back_populates="injectors")
+
+
+# =================================================================================================
+# Phase 3 — demand & thermal costs
+# =================================================================================================
+#
+# The demand pipeline replicates Rutina04.DEMxBarra2 (normalized per-bus/hour load shape x weekly
+# system-wide GWh target -> scaled per-bus demand) plus Archivo_03_PLPDEM_5A's block aggregation —
+# see demand_calc.py for the actual algorithm and the plan/session notes for how this was traced
+# out of the VBA source (this is a fully-specified algorithm, not a bootstrap-from-golden-file
+# situation like several Phase 1/2 fields).
+
+DEMAND_CATEGORIES = ("R", "L", "LD")  # Residencial, Libre, Libre en Distribucion
+DAY_TYPES = (1, 2, 3, 4)  # 1=Domingo, 2=Lunes, 3=Sabado, 4=Trabajo(Tue-Fri) — VBA's own encoding
+
+
+class DemandProfile(Base):
+    """One normalized historical hourly load value from the Demanda-R/L/LD sheets: MW for one
+    (bus, category, month, day-type, hour). ~480k rows for this case (139 buses x 3 categories x
+    12 months x 4 day-types x 24 hours) — bulk-inserted at import time, not built via the ORM one
+    row at a time (see migrate_from_xlsm._import_demand_profiles)."""
+
+    __tablename__ = "demand_profile"
+    __table_args__ = (
+        UniqueConstraint("case_id", "bus_id", "category", "month", "day_type", "hour"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    bus_id: Mapped[int] = mapped_column(ForeignKey("bus.id"))
+    category: Mapped[str] = mapped_column(String)  # one of DEMAND_CATEGORIES
+    month: Mapped[int] = mapped_column(Integer)  # 1-12
+    day_type: Mapped[int] = mapped_column(Integer)  # one of DAY_TYPES
+    hour: Mapped[int] = mapped_column(Integer)  # 1-24
+    mw: Mapped[float] = mapped_column(Float)
+
+
+class ConsumptionWeek(Base):
+    """One row of the Consumo sheet: a week's forecast system-wide consumption per category, used
+    to rescale DemandProfile's normalized shape to real energy targets (DemFC in DEMxBarra2)."""
+
+    __tablename__ = "consumption_week"
+    __table_args__ = (UniqueConstraint("case_id", "week_num"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    week_num: Mapped[int] = mapped_column(Integer)  # 1-based, in sheet row order
+    start_date: Mapped[_date] = mapped_column(Date)
+    num_days: Mapped[int] = mapped_column(Integer)
+    gwh_r: Mapped[float] = mapped_column(Float)
+    gwh_l: Mapped[float] = mapped_column(Float)
+    gwh_ld: Mapped[float] = mapped_column(Float)
+
+
+class Holiday(Base):
+    """A single holiday date (Consumo sheet's 'Festivos' column) — reclassifies that calendar day
+    as day-type 1 (Domingo) regardless of its actual weekday, matching DEMxBarra2 exactly."""
+
+    __tablename__ = "holiday"
+    __table_args__ = (UniqueConstraint("case_id", "date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    date: Mapped[_date] = mapped_column(Date)
+
+
+class IndustrialProject(Base):
+    """Proyectos sheet: a fixed MW demand addition at one bus over a date range."""
+
+    __tablename__ = "industrial_project"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    bus_id: Mapped[int] = mapped_column(ForeignKey("bus.id"))
+    start_date: Mapped[_date] = mapped_column(Date)
+    end_date: Mapped[_date] = mapped_column(Date)
+    demand_mw: Mapped[float] = mapped_column(Float)
+    description: Mapped[str | None] = mapped_column(String, default=None)
+
+    bus: Mapped[Bus] = relationship()
+
+
+class ThermalCostSchedule(Base):
+    """plpcosce.dat source record, from CV_MP sheet columns G-J (CENTRAL/INICIAL/FINAL/[US$/MWh])
+    — a contiguous stage range sharing one cost, expanded into per-stage rows at generation time.
+    Note: CV_MP also has an earlier, unrelated NAME/DATE1/DATE2/CV table (columns B-E) that turned
+    out NOT to be this file's source — see migrate_from_xlsm.py's docstring for how that was ruled
+    out (the G-J table's per-central row count matches plpcnfce.dat's NCenCos exactly; the B-E
+    table doesn't)."""
+
+    __tablename__ = "thermal_cost_schedule"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    stage_start: Mapped[int] = mapped_column(Integer)  # num_eta, inclusive
+    stage_end: Mapped[int] = mapped_column(Integer)  # num_eta, inclusive
+    cost_var: Mapped[float] = mapped_column(Float)
+
+    plant: Mapped[Plant] = relationship()

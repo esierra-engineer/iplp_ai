@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from .deps import BASE_DIR
-from .routers import batteries, buses, cases, generate, lines, plants, stages
+from .routers import batteries, buses, cases, generate, lines, plants, projects, stages, thermal_costs
 
 app = FastAPI(title="PLP Case Portal")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -22,4 +22,6 @@ app.include_router(lines.router)
 app.include_router(stages.router)
 app.include_router(plants.router)
 app.include_router(batteries.router)
+app.include_router(projects.router)
+app.include_router(thermal_costs.router)
 app.include_router(generate.router)
