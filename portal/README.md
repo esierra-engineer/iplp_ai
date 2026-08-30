@@ -5,7 +5,7 @@ authors PLP model case data and generates the `.dat` files the PLP solver reads.
 `/home/erick/.claude/plans/ethereal-scribbling-tiger.md` for the full phased plan; this covers
 what's implemented so far.
 
-## Status: Phase 0 + 1 + 2 + 3 + 4 complete
+## Status: Phase 0 + 1 + 2 + 3 + 4 + 5 complete
 
 - **Phase 0** — `curves/reservoir_volume.py`: the 15 `Vol_<Name>` reservoir level→volume rating
   curves ported from `xla/FUNCCDEC_CDEC.xla`, needed by Phase 4's maintenance generators.
@@ -72,6 +72,24 @@ what's implemented so far.
   rows) a handful of plants whose maintenance date ranges shifted enough to change which blocks are
   covered. Every test in this phase distinguishes that expected drift from an actual regression —
   see each `test_plpman*.py`'s comments for specifics.
+- **Phase 5** — hydrology & inflows: `inflow`, `hydrology_scenario_assignment`,
+  `aperture_index_simulation`, `aperture_index_aggregate`; generators for `plpaflce.dat` (172
+  plants, ~40k rows — the golden file is 21.5MB, the largest single input file in the project),
+  `plpidsim.dat`, `plpidape.dat`, `plpidap2.dat`.
+
+  All four are bootstrapped straight from the golden files — this was the plan's own scoping from
+  the start, not a shortcut found along the way: VBA's own `Rnd` PRNG (used for the "ALEATORIA"
+  hydrology-scenario sampling in `Archivo_07`/`Archivo_12`/`Archivo_13`) can't be reproduced
+  bit-for-bit in Python, so there was never a real algorithm to port here — these are plain
+  editable data now (a future "regenerate scenarios" action could use Python's own `random`,
+  explicitly not bit-compatible with old VBA runs, which is fine: these are stochastic draws, not
+  something needing historical reproducibility). Multi-value fields (a plant-block's 65
+  hydrology-class values, a stage's aperture-index list) are stored as JSON rather than one row
+  per value, since they're always read/written as one unit.
+
+  The only mismatch found: 2 plants in `plpaflce.dat` (`ALTOPOLC`, `Sum_Isla_Mina`) are classified
+  `'X'` (fuera de servicio) in the current Centrales sheet and so have no active `Plant` row at
+  all — same exclusion convention as `plpcnfce.dat` itself, not a new issue.
 
 ## Setup
 

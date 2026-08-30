@@ -476,6 +476,85 @@ def parse_plpmanbat(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
+# Phase 5 file parsers
+#
+# All four bootstrapped as data (not re-derived) per the plan's own scoping: the "ALEATORIA"
+# scenario-sampling path depends on VBA's own `Rnd` PRNG, which cannot be reproduced bit-for-bit
+# in Python — so these tables are imported once from the golden files and are then plain editable
+# data, not something a ported algorithm recomputes.
+# ---------------------------------------------------------------------------------------------
+
+
+def parse_plpaflce(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_cen, n_clase = (parse_int(t) for t in r.next_tokens()[:2])
+    plants = []
+    for _ in range(n_cen):
+        r.skip(1)
+        name = parse_name(r.next_tokens()[0])
+        r.skip(1)
+        n_blo = parse_int(r.next_tokens()[0])
+        r.skip(1)
+        blocks = []
+        for _ in range(n_blo):
+            tokens = r.next_tokens()
+            blocks.append(
+                {"num_blo": parse_int(tokens[1]), "values": [parse_float(t) for t in tokens[2 : 2 + n_clase]]}
+            )
+        plants.append({"name": name, "n_blo": n_blo, "blocks": blocks})
+    return {"n_cen": n_cen, "n_clase": n_clase, "plants": plants}
+
+
+def parse_plpidsim(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_simul, n_eta_cau = (parse_int(t) for t in r.next_tokens()[:2])
+    r.skip(1)
+    stages = []
+    for _ in range(n_eta_cau):
+        tokens = r.next_tokens()
+        stages.append({"num_eta": parse_int(tokens[1]), "hydro_class": [parse_int(t) for t in tokens[2:]]})
+    return {"n_simul": n_simul, "n_eta_cau": n_eta_cau, "stages": stages}
+
+
+def parse_plpidape(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_simul, n_eta_cau = (parse_int(t) for t in r.next_tokens()[:2])
+    simulations = []
+    for _ in range(n_simul):
+        r.skip(1)
+        stages = []
+        for _ in range(n_eta_cau):
+            tokens = r.next_tokens()
+            n_apert = parse_int(tokens[2])
+            stages.append(
+                {
+                    "num_eta": parse_int(tokens[1]),
+                    "apertures": [parse_int(t) for t in tokens[3 : 3 + n_apert]],
+                }
+            )
+        simulations.append(stages)
+    return {"n_simul": n_simul, "n_eta_cau": n_eta_cau, "simulations": simulations}
+
+
+def parse_plpidap2(text: str) -> dict:
+    r = RecordReader.from_text(text)
+    r.skip(2)
+    n_eta_cau = parse_int(r.next_tokens()[0])
+    r.skip(1)
+    stages = []
+    for _ in range(n_eta_cau):
+        tokens = r.next_tokens()
+        n_apert = parse_int(tokens[2])
+        stages.append(
+            {"num_eta": parse_int(tokens[1]), "apertures": [parse_int(t) for t in tokens[3 : 3 + n_apert]]}
+        )
+    return {"n_eta_cau": n_eta_cau, "stages": stages}
+
+
+# ---------------------------------------------------------------------------------------------
 # Phase 2 file parsers
 # ---------------------------------------------------------------------------------------------
 

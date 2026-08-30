@@ -44,6 +44,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from ..dat_readers import (
+    parse_plpaflce,
     parse_plpblo,
     parse_plpcenbat,
     parse_plpcenpmax,
@@ -51,11 +52,16 @@ from ..dat_readers import (
     parse_plpcnfce,
     parse_plpdeb,
     parse_plpeta,
+    parse_plpidap2,
+    parse_plpidape,
+    parse_plpidsim,
     parse_plpmanbat,
     parse_plpmat,
     parse_plprun,
 )
 from .models import (
+    ApertureIndexAggregate,
+    ApertureIndexSimulation,
     Battery,
     BatteryInjector,
     BatteryMaintenance,
@@ -65,7 +71,9 @@ from .models import (
     DebugParams,
     DemandProfile,
     Holiday,
+    HydrologyScenarioAssignment,
     IndustrialProject,
+    Inflow,
     Line,
     LineConfig,
     LineMaintenance,
@@ -137,6 +145,9 @@ def import_case(
     _import_reservoir_maintenance(session, case, plant_by_name, wb)
     _import_reservoir_min_volume_slack(session, case, plant_by_name, stages, wb)
     _import_battery_maintenance(session, case, dat_block_dependant_dir)
+
+    stage_by_num = {s.num_eta: s for s in stages}
+    _import_hydrology(session, case, plant_by_name, stage_by_num, dat_block_dependant_dir)
 
     return case
 
@@ -748,4 +759,74 @@ def _import_battery_maintenance(session: Session, case: Case, dat_block_dependan
                     e_max=row["e_max"],
                 )
             )
+    session.flush()
+
+
+def _import_hydrology(
+    session: Session,
+    case: Case,
+    plant_by_name: dict[str, Plant],
+    stage_by_num: dict[int, Stage],
+    dat_block_dependant_dir: Path,
+) -> None:
+    """plpaflce.dat/plpidsim.dat/plpidape.dat/plpidap2.dat: no Excel derivation at all — see
+    db/models.py's Phase 5 section docstring for why (VBA's own `Rnd` PRNG isn't reproducible).
+    Bootstrapped from the golden files; Inflow is bulk-inserted (~40k rows for this case)."""
+    aflce_path = dat_block_dependant_dir / "plpaflce.dat"
+    if aflce_path.exists():
+        aflce = parse_plpaflce(aflce_path.read_text(encoding="latin-1"))
+        rows = []
+        for p in aflce["plants"]:
+            plant = plant_by_name.get(p["name"])
+            if plant is None:
+                continue
+            for b in p["blocks"]:
+                rows.append(
+                    {
+                        "case_id": case.id,
+                        "plant_id": plant.id,
+                        "num_blo": b["num_blo"],
+                        "values": b["values"],
+                    }
+                )
+        session.execute(insert(Inflow), rows)
+
+    idsim_path = dat_block_dependant_dir / "plpidsim.dat"
+    if idsim_path.exists():
+        idsim = parse_plpidsim(idsim_path.read_text(encoding="latin-1"))
+        for s in idsim["stages"]:
+            stage = stage_by_num.get(s["num_eta"])
+            if stage is not None:
+                session.add(
+                    HydrologyScenarioAssignment(
+                        case_id=case.id, stage_id=stage.id, hydro_class_by_sim=s["hydro_class"]
+                    )
+                )
+
+    idape_path = dat_block_dependant_dir / "plpidape.dat"
+    if idape_path.exists():
+        idape = parse_plpidape(idape_path.read_text(encoding="latin-1"))
+        for sim_idx, stages in enumerate(idape["simulations"], start=1):
+            for s in stages:
+                stage = stage_by_num.get(s["num_eta"])
+                if stage is not None:
+                    session.add(
+                        ApertureIndexSimulation(
+                            case_id=case.id,
+                            simulation_slot=sim_idx,
+                            stage_id=stage.id,
+                            apertures=s["apertures"],
+                        )
+                    )
+
+    idap2_path = dat_block_dependant_dir / "plpidap2.dat"
+    if idap2_path.exists():
+        idap2 = parse_plpidap2(idap2_path.read_text(encoding="latin-1"))
+        for s in idap2["stages"]:
+            stage = stage_by_num.get(s["num_eta"])
+            if stage is not None:
+                session.add(
+                    ApertureIndexAggregate(case_id=case.id, stage_id=stage.id, apertures=s["apertures"])
+                )
+
     session.flush()

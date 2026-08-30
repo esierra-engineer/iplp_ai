@@ -14,6 +14,7 @@ from ... import demand_calc
 from ...db.models import Case
 from ...generators import (
     indhor,
+    plpaflce,
     plpbar,
     plpblo,
     plpcenbat,
@@ -25,6 +26,9 @@ from ...generators import (
     plpdeb,
     plpdem,
     plpeta,
+    plpidap2,
+    plpidape,
+    plpidsim,
     plpmanbat,
     plpmance,
     plpmanem,
@@ -58,6 +62,10 @@ GENERATORS = {
     "plpmanem.dat": plpmanem,
     "plpminembh.dat": plpminembh,
     "plpmanbat.dat": plpmanbat,
+    "plpaflce.dat": plpaflce,
+    "plpidsim.dat": plpidsim,
+    "plpidape.dat": plpidape,
+    "plpidap2.dat": plpidap2,
 }
 
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date as _date
 
-from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -602,3 +602,82 @@ class BatteryMaintenance(Base):
     e_max: Mapped[float] = mapped_column(Float)
 
     battery: Mapped[Battery] = relationship()
+
+
+# =================================================================================================
+# Phase 5 — hydrology & inflows
+# =================================================================================================
+#
+# All four tables here are bootstrapped from the golden .dat files rather than derived from the
+# Caudales_Ah1/Ah2/Caudales_historicos or Hidrología sheets — per the plan's own scoping, not a
+# shortcut discovered along the way: the "ALEATORIA" hydrology-scenario sampling in Rutina04's
+# sibling logic (Archivo_07/12/13) depends on VBA's own `Rnd` PRNG, which cannot be reproduced
+# bit-for-bit in Python. These are plain editable data going forward (and a future re-sampling
+# utility can regenerate them using Python's own `random`, explicitly not bit-compatible with old
+# VBA runs — that's fine, these are stochastic scenario draws, not something needing historical
+# reproducibility). Multi-value fields (a hydrology-class vector, an aperture-index list) are
+# stored as JSON rather than one row per value — these are always read/written as one unit, and
+# normalizing further would multiply row counts a hundredfold for no relational benefit.
+
+
+class Inflow(Base):
+    """plpaflce.dat source — one row per (plant, block), holding all NClase hydrology-class
+    inflow values as a JSON list (index 0 = hydrology class 1, etc.)."""
+
+    __tablename__ = "inflow"
+    __table_args__ = (UniqueConstraint("case_id", "plant_id", "num_blo"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plant.id"))
+    num_blo: Mapped[int] = mapped_column(Integer)
+    values: Mapped[list[float]] = mapped_column(JSON)  # length == case's n_clase
+
+    plant: Mapped[Plant] = relationship()
+
+
+class HydrologyScenarioAssignment(Base):
+    """plpidsim.dat source — one row per stage, holding the hydrology-class assigned to each of
+    the case's NSimul simulation slots as a JSON list (index 0 = simulation 1, etc.)."""
+
+    __tablename__ = "hydrology_scenario_assignment"
+    __table_args__ = (UniqueConstraint("case_id", "stage_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    stage_id: Mapped[int] = mapped_column(ForeignKey("stage.id"))
+    hydro_class_by_sim: Mapped[list[int]] = mapped_column(JSON)  # length == case's n_simul
+
+    stage: Mapped[Stage] = relationship()
+
+
+class ApertureIndexSimulation(Base):
+    """plpidape.dat source — one row per (simulation, stage), holding that stage's aperture-index
+    list as JSON (variable length per row — see spec). Stage 1 is excluded (the file format itself
+    restricts Etapa to 2..NEtapa)."""
+
+    __tablename__ = "aperture_index_simulation"
+    __table_args__ = (UniqueConstraint("case_id", "simulation_slot", "stage_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    simulation_slot: Mapped[int] = mapped_column(Integer)  # 1..n_simul
+    stage_id: Mapped[int] = mapped_column(ForeignKey("stage.id"))
+    apertures: Mapped[list[int]] = mapped_column(JSON)
+
+    stage: Mapped[Stage] = relationship()
+
+
+class ApertureIndexAggregate(Base):
+    """plpidap2.dat source — one row per stage (simulation-independent aggregate table; see
+    spec's distinction from ApertureIndexSimulation). Stage 1 excluded, same as above."""
+
+    __tablename__ = "aperture_index_aggregate"
+    __table_args__ = (UniqueConstraint("case_id", "stage_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("case.id"))
+    stage_id: Mapped[int] = mapped_column(ForeignKey("stage.id"))
+    apertures: Mapped[list[int]] = mapped_column(JSON)
+
+    stage: Mapped[Stage] = relationship()
